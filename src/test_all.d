@@ -6,6 +6,7 @@ module test_all;
 // when you add a <module>_test.d.
 
 import dnr.testing;
+import dnr.result_test;
 import dnr.mem_test;
 import dnr.array_test;
 import dnr.algo_test;
@@ -20,6 +21,7 @@ import c = core.stdc.stdio;
 extern (C) int main() {
     c.printf("dnr-std tests\n");
 
+    c.printf("result\n");     run_result_tests();
     c.printf("mem\n");        run_mem_tests();
     c.printf("array\n");      run_array_tests();
     c.printf("algo\n");       run_algo_tests();
