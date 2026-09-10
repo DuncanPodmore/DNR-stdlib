@@ -25,6 +25,7 @@ module dnr.hashmap;
 import mem = dnr.mem;
 import mth = dnr.math;
 import res = dnr.result;
+import hsh = dnr.hash;
 import cstr = core.stdc.string;
 
 enum size_t HM_MIN_CAP = 8;
@@ -32,19 +33,7 @@ enum size_t HM_MIN_CAP = 8;
 // --- default key hashing / equality -------------------------------------
 
 private size_t default_hash(K)(const K k) @nogc nothrow {
-    static if (is(K : const(char)[])) {
-        size_t h = 1469598103934665603UL;          // FNV-1a
-        foreach (c; k) { h ^= cast(ubyte) c; h *= 1099511628211UL; }
-        return h;
-    } else static if (is(K : ulong) || is(K == enum) || is(K : const(void)*)) {
-        ulong x = cast(ulong) k;                    // splitmix64 finaliser
-        x ^= x >> 33; x *= 0xFF51AFD7ED558CCDUL;
-        x ^= x >> 33; x *= 0xC4CEB9FE1A85EC53UL;
-        x ^= x >> 33;
-        return cast(size_t) x;
-    } else {
-        assert(0, "dnr.hashmap: no default hash for this key type — pass `hash` to hm_make");
-    }
+    return hsh.hash_of!K(k);
 }
 
 private bool default_eq(K)(const K a, const K b) @nogc nothrow {

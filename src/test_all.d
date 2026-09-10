@@ -12,6 +12,7 @@ import dnr.array_test;
 import dnr.algo_test;
 import dnr.math_test;
 import dnr.rng_test;
+import dnr.hash_test;
 import dnr.str_test;
 import dnr.hashmap_test;
 import dnr.panic_test;
@@ -20,6 +21,7 @@ import dnr.bitset_test;
 import dnr.ringbuf_test;
 import dnr.slotmap_test;
 import dnr.fmt_test;
+import dnr.ini_test;
 import c = core.stdc.stdio;
 
 extern (C) int main() {
@@ -31,6 +33,7 @@ extern (C) int main() {
     c.printf("algo\n");       run_algo_tests();
     c.printf("math\n");       run_math_tests();
     c.printf("rng\n");        run_rng_tests();
+    c.printf("hash\n");       run_hash_tests();
     c.printf("str\n");        run_str_tests();
     c.printf("hashmap\n");    run_hashmap_tests();
     c.printf("panic\n");      run_panic_tests();
@@ -39,6 +42,7 @@ extern (C) int main() {
     c.printf("ringbuf\n");    run_ringbuf_tests();
     c.printf("slotmap\n");    run_slotmap_tests();
     c.printf("fmt\n");        run_fmt_tests();
+    c.printf("ini\n");        run_ini_tests();
 
     return testing_summary();
 }
