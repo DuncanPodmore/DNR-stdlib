@@ -7,12 +7,14 @@ module test_all;
 
 import dnr.testing;
 import dnr.mem_test;
+import dnr.array_test;
 import c = core.stdc.stdio;
 
 extern (C) int main() {
     c.printf("dnr-std tests\n");
 
     c.printf("mem\n");        run_mem_tests();
+    c.printf("array\n");      run_array_tests();
 
     return testing_summary();
 }

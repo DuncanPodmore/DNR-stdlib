@@ -32,7 +32,8 @@ that every program re-implements otherwise.
 src/dnr/
   testing.d     assertion harness (check / near / expect_eq / testing_summary)
   mem.d         Allocator + malloc / arena / pool / tracking allocators
-  mem_test.d
+  array.d       Array!T — growable array over an Allocator
+  *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
 ```
@@ -74,13 +75,29 @@ Backends:
 | `pool_alloc_storage` / `pool_init` → `Pool!T` | fixed-capacity slot allocator, O(1) free list (a separate index stack); `pool_get` / `pool_put`; slots not zeroed — the game's `Enemy[700]` pattern |
 | `tracking_allocator(ref Tracker, inner)` | wraps another allocator, counts `bytes_outstanding` / `peak_bytes` / `total_allocs` — assert zero at teardown to catch a leak (test-only) |
 
+## `dnr.array` — `Array!T`
+
+The `~` append / `arr.length = n` resize that betterC drops. A struct holding a
+slice + capacity + the owning `Allocator`; every mutator is a free function over
+`ref Array!T`. Amortised doubling growth, so N pushes are O(N). A mutator that
+can grow returns `false` on OOM and leaves the array untouched.
+
+`array_make` / `array_from` / `array_free` · `array_push` / `array_append` /
+`array_pop` / `array_try_pop` / `array_back` · `array_insert` / `array_remove`
+(ordered) / `array_swap_remove` (O(1)) · `array_resize` (grow `.init`-fills) /
+`array_clear` / `array_reserve` / `array_shrink_to_fit` · `array_len` /
+`array_empty`, and `arr.items` is the live slice for iteration and indexing.
+
+⚠️ A handle, not a value — copying aliases the block. Pass by `ref`. POD
+container — element destructors are never run.
+
 ## Roadmap
 
 **Tier 0** (foundation, in order):
 
 - [x] `testing` — the assertion harness
 - [x] `mem` — allocators
-- [ ] `array` — `Array!T` (dynamic array over an `Allocator`), the `~` / `.length`
+- [x] `array` — `Array!T` (growable array over an `Allocator`), the `~` / `.length`
       replacement
 - [ ] `algo` — sort, binary search, min/max/clamp over slices
 - [ ] `math` — the `core.stdc.math` gaps: lerp, `PI` etc., int helpers, a stable
