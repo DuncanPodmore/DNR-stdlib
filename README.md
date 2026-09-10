@@ -35,6 +35,7 @@ src/dnr/
   array.d       Array!T — growable array over an Allocator
   algo.d        sort / search / rearrange over slices
   math.d        scalar helpers — min/max/clamp, lerp, angle wrap, pow2
+  rng.d         xoshiro256** PRNG with explicit state
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
@@ -126,6 +127,18 @@ defaulting to `a < b`. Pass one for descending order or sort-by-key.
 - constants: `PI` / `TAU` / `HALF_PI` / `E` / `SQRT2` / `DEG2RAD` / `RAD2DEG`
   (plus `PI_F` / `TAU_F` / `HALF_PI_F` and `EPSILON`)
 
+## `dnr.rng` — deterministic PRNG
+
+`Rng` is xoshiro256** — 256 bits of state in a plain struct you pass by `ref`.
+No global generator (a hidden one makes results irreproducible). Seeding is
+explicit, no OS entropy (that's platform code) — a fixed seed is usually what a
+game wants anyway.
+
+`rng_seed(ulong)` · `next_u64` / `next_u32` / `next_float` / `next_double` (both
+floats in `[0, 1)`) · `below(bound)` (unbiased) / `range_i(lo, hi)` /
+`range_f(lo, hi)` / `chance(p)` / `sign` · `pick(slice)` / `shuffle(slice)`
+(Fisher-Yates). Not cryptographic.
+
 ## Roadmap
 
 **Tier 0** (foundation) — **complete:**
@@ -140,10 +153,11 @@ defaulting to `a < b`. Pass one for descending order or sort-by-key.
 
 **Tier 1:**
 
+- [x] `rng` — xoshiro256** PRNG, explicit state, ranges / `chance` / `pick` /
+      `shuffle`
 - [ ] `str` — `StringBuilder`, split/trim/starts_with over `const(char)[]`,
       int/float ⇄ string
 - [ ] `hashmap` — `HashMap!(K,V)`, open-addressed, `Allocator`-backed
-- [ ] `rng` — a small PRNG (xoshiro / pcg), explicit state
 - [ ] `io` — thin `FILE*` wrappers: read-whole-file, line iterator, buffered writer
 - [ ] `option` / `result` / `panic` — `Option!T`, `Result!(T,E)`, a `panic()` that
       prints and aborts
