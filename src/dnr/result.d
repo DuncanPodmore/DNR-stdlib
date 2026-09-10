@@ -130,6 +130,14 @@ struct Result(T, E = StdErr) {
         return true;
     }
 
+    // Imperative bridge: if ok, copy the value into `out_` and return true.
+    //   T v; if (parse(s).take(v)) use(v);
+    bool take(ref T out_) @nogc nothrow {
+        if (!_ok) return false;
+        out_ = _val;
+        return true;
+    }
+
     // Discard the error, becoming an Option.
     Option!T optional() @nogc nothrow {
         return _ok ? some!T(_val) : none!T();

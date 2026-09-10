@@ -41,18 +41,22 @@ src/dnr/
   testing.d     assertion harness (check / near / expect_eq / testing_summary)
   panic.d       panic / unreachable / todo / panic_if
   result.d      Option!T / Result!(T,E) / Status / StdErr
-  mem.d         Allocator + malloc / arena / pool / tracking allocators
+  mem.d         Allocator + malloc / arena / growing-arena / pool / tracking
   array.d       Array!T — growable array over an Allocator
   algo.d        sort / search / rearrange over slices
   math.d        scalar helpers — min/max/clamp, lerp, angle wrap, pow2
   rng.d         xoshiro256** PRNG with explicit state
+  hash.d        FNV-1a / hash64 / fmix64 / hash_combine / hash_of
   str.d         slice ops + parsing + Sb (StringBuilder)
+  utf8.d        strict decode / encode / validate + rune iterator
   hashmap.d     HashMap!(K,V) — open-addressed, Allocator-backed
   bitset.d      BitArray!N (fixed) / BitSet (dynamic) + bits_* primitives
   ringbuf.d     RingBuffer!T — growable double-ended queue
   slotmap.d     SlotMap!T — pool with generation-checked handles
   fmt.d         compile-time-checked {} formatting
+  ini.d         key = value + [section] parse / write
   io.d          whole-file read/write + LineReader
+  time.d        monotonic clock + Duration + Stopwatch
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
@@ -75,10 +79,10 @@ No external libraries — `core.stdc` only.
 The value-carrying failure types. Construct with `some` / `none`, `ok` / `err`
 (T explicit: `err!int(StdErr.overflow)`), `pass` / `fail`. Read with `is_some` /
 `is_ok`, `unwrap` (panics through `dnr.panic` on the empty case), `unwrap_or`, or
-the imperative bridge — `opt.take(out_)` / `res.failed(err_out)` return a `bool`
-and fill an out-parameter. `E` defaults to `StdErr` (`oom` / `not_found` /
-`invalid` / `overflow` / `io` / `unexpected_eof` / `permission` / `unknown`),
-`err_name` for messages.
+the imperative bridge — `opt.take(out_)` / `res.take(out_)` copy the value into
+an out-parameter and return `bool` (`res.failed(err_out)` does the same for the
+error). `E` defaults to `StdErr` (`oom` / `not_found` / `invalid` / `overflow` /
+`io` / `unexpected_eof` / `permission` / `unknown`), `err_name` for messages.
 
 ## `dnr.mem` — the allocator layer
 
@@ -105,6 +109,7 @@ Backends:
 |---|---|
 | `malloc_allocator()` | wraps `core.stdc.stdlib`; alignment ≤ 16 |
 | `arena_allocator(ref Arena)` | bump allocator over a caller-provided buffer; `raw_free` pops only the most-recent block; `arena_reset` frees all at once; OOM → null |
+| `garena_allocator(ref GrowingArena)` | bump allocator that asks a parent allocator for another (bigger) block when full; `garena_reset` frees all but the largest block and rewinds it; `garena_free` returns everything |
 | `pool_alloc_storage` (→ `Status`) / `pool_init` → `Pool!T` | fixed-capacity slot allocator, O(1) free list (a separate index stack); `pool_get` / `pool_put`; slots not zeroed — the game's `Enemy[700]` pattern |
 | `tracking_allocator(ref Tracker, inner)` | wraps another allocator, counts `bytes_outstanding` / `peak_bytes` / `total_allocs` — assert zero at teardown to catch a leak (test-only) |
 
@@ -171,6 +176,17 @@ floats in `[0, 1)`) · `below(bound)` (unbiased) / `range_i(lo, hi)` /
 `range_f(lo, hi)` / `chance(p)` / `sign` · `pick(slice)` / `shuffle(slice)`
 (Fisher-Yates). Not cryptographic.
 
+## `dnr.hash` — non-cryptographic hashing
+
+What `dnr.hashmap` needs for its default keys, made public for custom keys,
+dedup and cheap checksums.
+
+`fnv1a(bytes)` (cheap, weak avalanche) · `hash64(bytes)` (FNV-1a + a Murmur3
+finaliser — a solid table hash) · `fmix64(x)` (the 64-bit avalanche alone) ·
+`hash_combine(seed, v)` (fold one hash into a running seed, order-dependent —
+the 64-bit `boost::hash_combine`) · `hash_of!T(v)` (the scalar / pointer /
+string dispatch). Not cryptographic.
+
 ## `dnr.str` — strings for betterC
 
 A "string" is `const(char)[]` — a slice, **not** null-terminated. `from_cstr`
@@ -194,6 +210,20 @@ chainable and all no-ops once an allocation fails — `sb_reserve` returns
 `Status`, and `sb.ok` is the one check at the end. `sb_slice` is the contents;
 `sb_cstr` appends a `\0` without counting it. `sb_fixed(char[])` wraps a caller
 buffer (no allocator — overflow truncates and latches `ok` false).
+
+## `dnr.utf8` — strict UTF-8
+
+`dnr.str` is ASCII-only; this handles code points. **Strict** — overlong
+encodings, surrogate halves and anything past U+10FFFF are errors.
+
+- `utf8_decode(s)` → `Result!Rune` (`{ uint cp; ubyte len }`) · `utf8_encode(cp,
+  ref char[4])` → `Result!size_t` · `rune_len(cp)` (1–4, or −1)
+- `utf8_validate(s)` → `bool` · `utf8_count(s)` → `Result!size_t` (code points)
+- `utf8_put(sb, cp)` — append one code point to an `Sb`
+- `utf8_runes(s)` / `utf8_next` — a **lossy** iterator: a bad byte yields U+FFFD
+  and advances one, so the loop never stalls
+
+Code points are `uint` (char / wchar don't implicitly widen to `dchar` in D).
 
 ## `dnr.hashmap` — `HashMap!(K, V)`
 
@@ -272,6 +302,26 @@ dispatch covers bool / char / integers / floats / `const(char)[]` /
 `const(char)*` / enum (→ member name) / pointers. Output goes through an `Sb`,
 so a fixed-buffer target truncates cleanly.
 
+## `dnr.ini` — `key = value` config
+
+The format the game's `.cfg` / `.lang` loaders hand-roll. Reading is a
+zero-allocation streaming walk (slices into your buffer):
+
+```d
+auto p = ini_parse(buf);
+IniEntry e;                // { section, key, value, is_section }
+while (ini_next(p).take(e)) {
+    if (e.is_section) …
+    else if (str.equals(e.key, "volume")) … e.value …
+}
+```
+
+`#` / `;` are comment lines; `[section]` headers scope the pairs after them;
+whitespace around key and value is trimmed; `#` inside a value is literal;
+blank and unparseable lines are skipped. Writing builds into an `Sb`:
+`ini_section` / `ini_pair` / `ini_pair_int` / `ini_pair_float` / `ini_pair_bool`
+/ `ini_comment`.
+
 ## `dnr.panic` — fail loudly and stop
 
 betterC keeps `assert` but gives you no message on `assert(0)` and no trace.
@@ -294,6 +344,19 @@ Thin `core.stdc.stdio` wrappers for the common jobs. Paths are `const(char)[]`
 - `file_exists` → `bool`; `file_size` → `Result!long`
 - `LineReader`: `auto it = lines(buf); const(char)[] ln; while (read_line(it).take(ln))`
   — splits on `\n`, strips a trailing `\r`, no phantom final empty line
+
+## `dnr.time` — monotonic clock
+
+Never runs backward, unaffected by wall-clock changes — frame timing, timeouts,
+profiling. **Not** a calendar. dnr-std's first per-OS shim
+(`QueryPerformanceCounter` on Windows, `clock_gettime(CLOCK_MONOTONIC)` on
+POSIX).
+
+`now()` → `Instant` · `since(Instant)` / `elapsed(from, to)` → `Duration` ·
+`sleep(Duration)`. `Duration` is nanoseconds: `dur_millis` / `dur_micros` /
+`dur_nanos` / `dur_seconds` in, `dur_as_millis` / `dur_as_seconds` / … out,
+`dur_add` / `dur_sub` / `dur_cmp`. `Stopwatch`: `sw_start` / `sw_read` (elapsed)
+/ `sw_lap` (elapsed + restart).
 
 ## Roadmap
 
@@ -320,18 +383,17 @@ Thin `core.stdc.stdio` wrappers for the common jobs. Paths are `const(char)[]`
 - [x] `io` — `read_file` / `write_file` / `append_file` / `file_size` / `file_exists`
       + the `LineReader` iterator
 
-**Tier 2 — in progress:**
+**Tier 2 — complete:**
 
 - [x] `bitset` — `BitArray!N` / `BitSet` + `bits_*` primitives
 - [x] `ringbuf` — `RingBuffer!T`, a growable deque
 - [x] `slotmap` — `SlotMap!T`, generation-checked stable handles
 - [x] `fmt` — compile-time-checked `{}` formatting into `Sb` / a fixed buffer
-- [ ] `hash` — expose FNV-1a + a stronger 64-bit hash + `hash_combine`
-- [ ] `ini` — `key = value` + `[section]` parse / write (replaces the game's
-      hand-rolled `.cfg` loaders)
-- [ ] `utf8` — `decode` / `encode` / `validate` / `count_runes`
-- [ ] `time` — monotonic `now()` + `Duration` (first per-OS shim)
-- [ ] `mem` extras — a growing (block-chaining) arena; an aligned backend
+- [x] `hash` — FNV-1a + `hash64` (avalanched) + `fmix64` + `hash_combine`
+- [x] `ini` — `key = value` + `[section]` streaming parse / `Sb` writer
+- [x] `utf8` — strict decode / encode / validate / count + a lossy rune iterator
+- [x] `time` — monotonic `now()` + `Duration` + `Stopwatch` (Windows + POSIX)
+- [x] `mem` — a growing (block-chaining) arena (`GrowingArena`)
 
 ## Using it in a project
 
@@ -339,5 +401,6 @@ Vendor `src/dnr/` into your tree and add the files you use (plus their
 transitive imports) to your build's source list — no globbing, same as the
 game. Every module needs `panic` + `result`; `mem` pulls in nothing else;
 `array` / `str` / `hashmap` / `io` / `bitset` / `ringbuf` / `slotmap` pull in
-`mem`; `fmt` pulls in `str`. Ship `dnr.testing` too if you want the same
-`check` harness for your own tests.
+`mem`; `fmt` pulls in `str`; `hashmap` pulls in `hash`; `ini` pulls in `str` +
+`io` + `fmt`; `utf8` pulls in `str`; `time` stands alone. Ship `dnr.testing`
+too if you want the same `check` harness for your own tests.

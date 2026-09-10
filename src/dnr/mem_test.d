@@ -155,6 +155,69 @@ void test_arena_realloc_last() {
     expect_eq(s[2], 0, "grown tail .init-filled");
 }
 
+void test_growing_arena() {
+    Tracker t;
+    Allocator backing = tracked(t);
+
+    GrowingArena ga = garena_make(backing, 128);
+    Allocator a = garena_allocator(ga);
+
+    // fill past the first block, forcing chained allocations
+    int*[64] ptrs;
+    bool allOk = true;
+    foreach (i; 0 .. 64) {
+        auto r = make!int(a);
+        if (r.is_err) { allOk = false; continue; }
+        ptrs[i] = r.unwrap;
+        *ptrs[i] = i * 100;
+    }
+    check(allOk, "64 garena make!int all succeeded");
+    // every earlier pointer must still hold its value (blocks are never moved)
+    bool intact = true;
+    foreach (i; 0 .. 64) if (*ptrs[i] != i * 100) intact = false;
+    check(intact, "chained blocks keep their contents");
+    check(garena_used(ga) >= 64 * int.sizeof, "garena_used counts across blocks");
+    check(t.allocs_outstanding >= 2, "more than one backing block was requested");
+
+    size_t blocksAllocd = t.allocs_outstanding;
+    garena_reset(ga);
+    check(garena_used(ga) == 0, "garena_reset rewinds to empty");
+    check(t.allocs_outstanding == 1, "garena_reset freed all but the largest block");
+
+    // reusable after reset
+    auto r2 = make_n!long(a, 4);
+    check(r2.is_ok() && r2.unwrap.length == 4, "garena usable after reset");
+    r2.unwrap[3] = 77;
+    check(r2.unwrap[3] == 77, "…and writable");
+
+    garena_free(ga);
+    check(t.bytes_outstanding == 0, "garena_free returned everything");
+}
+
+void test_growing_arena_realloc() {
+    Tracker t;
+    Allocator backing = tracked(t);
+    GrowingArena ga = garena_make(backing, 256);
+    Allocator a = garena_allocator(ga);
+
+    int[] s = make_n!int(a, 4).unwrap;
+    s[0] = 1; s[1] = 2;
+    void* p0 = s.ptr;
+    check(resize_n(a, s, 8).is_ok(), "garena grow of the last allocation");
+    check(s.ptr is p0, "…is done in place");
+    check(s[0] == 1 && s[2] == 0, "data kept, new tail zeroed");
+
+    // an allocation in between means the next resize must copy forward
+    cast(void) make!int(a);
+    void* p1 = s.ptr;
+    check(resize_n(a, s, 16).is_ok(), "garena grow of a non-last allocation");
+    check(s.ptr !is p1, "…copies to a new spot");
+    check(s[0] == 1 && s[1] == 2, "copied data survives");
+
+    garena_free(ga);
+    check(t.bytes_outstanding == 0, "freed clean");
+}
+
 void test_pool() {
     Tracker t;
     Allocator a = tracked(t);
@@ -224,6 +287,8 @@ void run_mem_tests() {
     test_arena_oom();
     test_arena_alignment();
     test_arena_realloc_last();
+    test_growing_arena();
+    test_growing_arena_realloc();
     test_pool();
     test_pool_caller_storage();
     test_tracker_peak();

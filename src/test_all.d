@@ -22,6 +22,8 @@ import dnr.ringbuf_test;
 import dnr.slotmap_test;
 import dnr.fmt_test;
 import dnr.ini_test;
+import dnr.utf8_test;
+import dnr.time_test;
 import c = core.stdc.stdio;
 
 extern (C) int main() {
@@ -43,6 +45,8 @@ extern (C) int main() {
     c.printf("slotmap\n");    run_slotmap_tests();
     c.printf("fmt\n");        run_fmt_tests();
     c.printf("ini\n");        run_ini_tests();
+    c.printf("utf8\n");       run_utf8_tests();
+    c.printf("time\n");       run_time_tests();
 
     return testing_summary();
 }

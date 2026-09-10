@@ -200,6 +200,130 @@ size_t arena_used(ref Arena a)  @nogc nothrow { return a.offset; }
 size_t arena_free_bytes(ref Arena a) @nogc nothrow { return a.buf.length - a.offset; }
 
 // ---------------------------------------------------------------------------
+// GrowingArena — a bump allocator that chains new blocks as it fills
+// ---------------------------------------------------------------------------
+// `Arena` is one fixed buffer; this asks a parent Allocator for another
+// (geometrically larger) block when the current one is full. You keep the
+// arena's O(1) bump and O(1) mass-free without sizing the buffer up front.
+//
+//   `garena_reset` frees every block but the largest and rewinds it to empty
+//   — reuse it every frame. `garena_free` returns everything to the parent.
+//
+// Per-allocation `raw_free` is a no-op (arena semantics); `raw_realloc`
+// extends the last allocation in place when it can, else copies forward.
+//
+// ⚠️ The Allocator holds `&arena`; the GrowingArena must outlive it.
+
+struct GrowingArena {
+    private static struct Block {
+        ubyte[]      mem;      // usable bytes (past this header)
+        size_t       used;
+        Block*       next;     // toward the older / larger blocks
+    }
+    Allocator parent;
+    private Block* head;
+    private size_t firstSize;
+}
+
+GrowingArena garena_make(Allocator parent, size_t firstBlock = 4096) @nogc nothrow {
+    GrowingArena a;
+    a.parent = parent;
+    a.firstSize = firstBlock < 64 ? 64 : firstBlock;
+    return a;
+}
+
+private GrowingArena.Block* garena_new_block(ref GrowingArena a, size_t need) @nogc nothrow {
+    alias Block = GrowingArena.Block;
+    size_t prev = a.head ? a.head.mem.length : a.firstSize / 2;
+    size_t want = prev * 2;
+    if (want < need) want = need;
+    if (want < a.firstSize) want = a.firstSize;
+
+    void* raw = a.parent.raw_alloc(Block.sizeof + want, DEFAULT_ALIGN);
+    if (raw is null) return null;
+    Block* b = cast(Block*) raw;
+    b.mem = (cast(ubyte*) raw + Block.sizeof)[0 .. want];
+    b.used = 0;
+    b.next = a.head;
+    a.head = b;
+    return b;
+}
+
+private void* garena_alloc(void* ctx, size_t size, size_t alignment) @nogc nothrow {
+    auto a = cast(GrowingArena*) ctx;
+    if (a.head !is null) {
+        size_t start = align_up(a.head.used, alignment);
+        if (start + size <= a.head.mem.length) {
+            a.head.used = start + size;
+            return a.head.mem.ptr + start;
+        }
+    }
+    auto b = garena_new_block(*a, size + alignment);
+    if (b is null) return null;
+    size_t start = align_up(b.used, alignment);
+    b.used = start + size;
+    return b.mem.ptr + start;
+}
+
+private void* garena_realloc(void* ctx, void* ptr, size_t oldSize, size_t newSize, size_t alignment) @nogc nothrow {
+    auto a = cast(GrowingArena*) ctx;
+    auto h = a.head;
+    if (h !is null && ptr is h.mem.ptr + (h.used - oldSize)) {   // the last allocation
+        if ((h.used - oldSize) + newSize <= h.mem.length) {
+            h.used = (h.used - oldSize) + newSize;
+            return ptr;
+        }
+    }
+    void* np = garena_alloc(ctx, newSize, alignment);
+    if (np is null) return null;
+    cstr.memcpy(np, ptr, oldSize < newSize ? oldSize : newSize);
+    return np;
+}
+
+private void garena_free_one(void* ctx, void* ptr, size_t size) @nogc nothrow {
+    // arena semantics — reclaim happens in garena_reset / garena_free
+}
+
+Allocator garena_allocator(ref GrowingArena a) @nogc nothrow {
+    return Allocator(&a, &garena_alloc, &garena_realloc, &garena_free_one);
+}
+
+// Free every block except the largest (the first one requested — it sits at
+// the tail of the chain), and rewind it to empty for reuse.
+void garena_reset(ref GrowingArena a) @nogc nothrow {
+    alias Block = GrowingArena.Block;
+    Block* tail = a.head;
+    while (tail !is null && tail.next !is null) tail = tail.next;
+
+    Block* b = a.head;
+    while (b !is null && b !is tail) {
+        Block* nx = b.next;
+        a.parent.raw_free(b, Block.sizeof + b.mem.length);
+        b = nx;
+    }
+    if (tail !is null) { tail.used = 0; tail.next = null; }
+    a.head = tail;
+}
+
+void garena_free(ref GrowingArena a) @nogc nothrow {
+    alias Block = GrowingArena.Block;
+    Block* b = a.head;
+    while (b !is null) {
+        Block* nx = b.next;
+        a.parent.raw_free(b, Block.sizeof + b.mem.length);
+        b = nx;
+    }
+    a.head = null;
+}
+
+// Total live bytes handed out since the last reset.
+size_t garena_used(ref GrowingArena a) @nogc nothrow {
+    size_t n = 0;
+    for (auto b = a.head; b !is null; b = b.next) n += b.used;
+    return n;
+}
+
+// ---------------------------------------------------------------------------
 // Pool!T — a fixed-capacity slot allocator with an O(1) free list
 // ---------------------------------------------------------------------------
 // The game's `Enemy[700]` + `alive` flag pattern, generalised. `pool_get`
