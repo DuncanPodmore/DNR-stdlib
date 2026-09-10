@@ -13,6 +13,8 @@ import dnr.math_test;
 import dnr.rng_test;
 import dnr.str_test;
 import dnr.hashmap_test;
+import dnr.panic_test;
+import dnr.io_test;
 import c = core.stdc.stdio;
 
 extern (C) int main() {
@@ -25,6 +27,8 @@ extern (C) int main() {
     c.printf("rng\n");        run_rng_tests();
     c.printf("str\n");        run_str_tests();
     c.printf("hashmap\n");    run_hashmap_tests();
+    c.printf("panic\n");      run_panic_tests();
+    c.printf("io\n");         run_io_tests();
 
     return testing_summary();
 }

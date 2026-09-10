@@ -38,6 +38,8 @@ src/dnr/
   rng.d         xoshiro256** PRNG with explicit state
   str.d         slice ops + parsing + Sb (StringBuilder)
   hashmap.d     HashMap!(K,V) — open-addressed, Allocator-backed
+  panic.d       panic / unreachable / todo / panic_if
+  io.d          whole-file read/write + LineReader
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
@@ -180,6 +182,28 @@ never recompute it.
 key's bytes must outlive the entry. Handle, not a value (copying aliases). POD
 — no element destructors.
 
+## `dnr.panic` — fail loudly and stop
+
+betterC keeps `assert` but gives you no message on `assert(0)` and no trace.
+These print `panic: <msg>  (<file>:<line>)` to stderr and `abort()`:
+
+`panic(msg)` · `unreachable()` · `todo()` — all `noreturn`, so control-flow
+analysis knows the branch ends · `panic_if(cond, msg)` — a guard that returns
+normally when `cond` is false. `format_panic(buf, …)` builds the line without
+aborting (what the tests check).
+
+## `dnr.io` — files
+
+Thin `core.stdc.stdio` wrappers for the common jobs. Paths are `const(char)[]`
+(copied to null-terminate; over 1023 bytes is rejected). Regular files only.
+
+- `read_file(a, path)` → `ubyte[]` from the allocator (empty on any failure;
+  free with `mem.free_n`), `read_file_text` → `char[]`
+- `write_file(path, data)` / `append_file(path, data)` → bool
+- `file_exists` / `file_size` (→ -1 on error)
+- `LineReader`: `auto it = lines(buf); const(char)[] ln; while (next_line(it, ln))`
+  — splits on `\n`, strips a trailing `\r`, no phantom final empty line
+
 ## Roadmap
 
 **Tier 0** (foundation) — **complete:**
@@ -200,8 +224,9 @@ key's bytes must outlive the entry. Handle, not a value (copying aliases). POD
       (`parse_int` / `parse_float` / …), and `Sb` (a StringBuilder)
 - [x] `hashmap` — `HashMap!(K,V)`, open-addressed, linear probing + backward-shift
       delete, `Allocator`-backed
-- [ ] `io` — thin `FILE*` wrappers: read-whole-file, line iterator, buffered writer
-- [ ] `panic` — `panic(msg)` / `unreachable()` / `todo()` — print to stderr + abort
+- [x] `panic` — `panic(msg)` / `unreachable()` / `todo()` / `panic_if` — stderr + abort
+- [x] `io` — `read_file` / `write_file` / `append_file` / `file_size` / `file_exists`
+      + the `LineReader` iterator
 - [ ] `option` / `result` — `Option!T`, `Result!(T,E)` *(pending an owner call —
       the rest of dnr-std reports failure with `bool` / `null`, so these may not
       fit its own idiom)*
