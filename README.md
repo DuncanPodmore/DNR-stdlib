@@ -37,6 +37,7 @@ src/dnr/
   math.d        scalar helpers — min/max/clamp, lerp, angle wrap, pow2
   rng.d         xoshiro256** PRNG with explicit state
   str.d         slice ops + parsing + Sb (StringBuilder)
+  hashmap.d     HashMap!(K,V) — open-addressed, Allocator-backed
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
@@ -161,6 +162,24 @@ crosses in from C, `Sb.cstr` crosses back. ASCII only. Three parts:
 chainable and all no-ops once an allocation fails — check `sb.ok` once at the
 end. `sb_slice` is the contents; `sb_cstr` appends a `\0` without counting it.
 
+## `dnr.hashmap` — `HashMap!(K, V)`
+
+Open addressing, linear probing, **backward-shift deletion** (no tombstones).
+Grows ×2 at 0.75 load. The per-slot hash is cached so probing and resizing
+never recompute it.
+
+- integer / enum / pointer keys and string keys (`const(char)[]`, FNV-1a +
+  memcmp) work with no help; any other `K` needs `hash` + `eq` function
+  pointers passed to `hm_make`
+- `hm_put` (insert or overwrite, `false` on OOM) · `hm_get` (→ `V*` or null,
+  mutable) · `hm_contains` / `hm_get_or` · `hm_remove` (→ bool) · `hm_clear` /
+  `hm_len` / `hm_empty`
+- iterate: `auto it = hm_iter(h); K k; V* v; while (hm_next(it, k, v)) …`
+
+⚠️ Stores keys and values **by value, copying nothing behind them** — a string
+key's bytes must outlive the entry. Handle, not a value (copying aliases). POD
+— no element destructors.
+
 ## Roadmap
 
 **Tier 0** (foundation) — **complete:**
@@ -179,7 +198,10 @@ end. `sb_slice` is the contents; `sb_cstr` appends a `\0` without counting it.
       `shuffle`
 - [x] `str` — slice ops (`equals` / `trim` / `Splitter` / classify), parsing
       (`parse_int` / `parse_float` / …), and `Sb` (a StringBuilder)
-- [ ] `hashmap` — `HashMap!(K,V)`, open-addressed, `Allocator`-backed
+- [x] `hashmap` — `HashMap!(K,V)`, open-addressed, linear probing + backward-shift
+      delete, `Allocator`-backed
 - [ ] `io` — thin `FILE*` wrappers: read-whole-file, line iterator, buffered writer
-- [ ] `option` / `result` / `panic` — `Option!T`, `Result!(T,E)`, a `panic()` that
-      prints and aborts
+- [ ] `panic` — `panic(msg)` / `unreachable()` / `todo()` — print to stderr + abort
+- [ ] `option` / `result` — `Option!T`, `Result!(T,E)` *(pending an owner call —
+      the rest of dnr-std reports failure with `bool` / `null`, so these may not
+      fit its own idiom)*

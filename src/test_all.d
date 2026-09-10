@@ -12,6 +12,7 @@ import dnr.algo_test;
 import dnr.math_test;
 import dnr.rng_test;
 import dnr.str_test;
+import dnr.hashmap_test;
 import c = core.stdc.stdio;
 
 extern (C) int main() {
@@ -23,6 +24,7 @@ extern (C) int main() {
     c.printf("math\n");       run_math_tests();
     c.printf("rng\n");        run_rng_tests();
     c.printf("str\n");        run_str_tests();
+    c.printf("hashmap\n");    run_hashmap_tests();
 
     return testing_summary();
 }
