@@ -19,6 +19,7 @@ import dnr.io_test;
 import dnr.bitset_test;
 import dnr.ringbuf_test;
 import dnr.slotmap_test;
+import dnr.fmt_test;
 import c = core.stdc.stdio;
 
 extern (C) int main() {
@@ -37,6 +38,7 @@ extern (C) int main() {
     c.printf("bitset\n");     run_bitset_tests();
     c.printf("ringbuf\n");    run_ringbuf_tests();
     c.printf("slotmap\n");    run_slotmap_tests();
+    c.printf("fmt\n");        run_fmt_tests();
 
     return testing_summary();
 }

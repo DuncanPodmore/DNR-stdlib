@@ -250,15 +250,19 @@ res.Result!double parse_float(const(char)[] s) @nogc nothrow {
 // 3. Sb — a StringBuilder over an Allocator
 // ===========================================================================
 // Grows a single buffer. Every `put_*` is chainable and no-ops once an
-// allocation has failed — check `sb.ok` (or the return of `sb_reserve`) once
-// at the end rather than after each call. `sb_slice` is the contents;
-// `sb_cstr` appends a '\0' (not counted) and returns a C pointer.
+// allocation has failed (or a fixed buffer filled up) — check `sb.ok` (or the
+// return of `sb_reserve`) once at the end rather than after each call.
+// `sb_slice` is the contents; `sb_cstr` appends a '\0' (not counted).
+//
+// `sb_fixed` wraps a caller-provided `char[]` with no allocator: it can't
+// grow, so overflowing it truncates and latches `ok` false.
 
 struct Sb {
     char[]        buf;    // buf[0 .. len] is live
     size_t        len;
     mem.Allocator a;
     bool          ok = true;
+    bool          fixed = false;   // buf is caller-owned, cannot grow
 }
 
 Sb sb_make(mem.Allocator a, size_t reserve = 0) @nogc nothrow {
@@ -268,8 +272,17 @@ Sb sb_make(mem.Allocator a, size_t reserve = 0) @nogc nothrow {
     return s;
 }
 
+// A builder over a fixed caller buffer — no allocation. Overflow truncates
+// and sets `ok` false.
+Sb sb_fixed(char[] buf) @nogc nothrow {
+    Sb s;
+    s.buf = buf;
+    s.fixed = true;
+    return s;
+}
+
 void sb_free(ref Sb s) @nogc nothrow {
-    if (s.buf.length) s.a.raw_free(s.buf.ptr, s.buf.length);
+    if (!s.fixed && s.buf.length) s.a.raw_free(s.buf.ptr, s.buf.length);
     s.buf = null;
     s.len = 0;
     s.ok = true;
@@ -286,6 +299,7 @@ size_t sb_len(ref Sb s) @nogc nothrow { return s.len; }
 res.Status sb_reserve(ref Sb s, size_t want) @nogc nothrow {
     if (!s.ok) return res.fail(res.StdErr.oom);
     if (want <= s.buf.length) return res.pass();
+    if (s.fixed) { s.ok = false; return res.fail(res.StdErr.oom); }
     size_t cap = s.buf.length < 16 ? 16 : s.buf.length;
     while (cap < want) cap *= 2;
     void* p = s.buf.length
@@ -298,7 +312,12 @@ res.Status sb_reserve(ref Sb s, size_t want) @nogc nothrow {
 
 void sb_put(ref Sb s, const(char)[] str) @nogc nothrow {
     if (!s.ok || str.length == 0) return;
-    if (sb_reserve(s, s.len + str.length).is_err) return;
+    if (sb_reserve(s, s.len + str.length).is_err) {
+        // fixed buffer overflowed — copy what fits, byte-truncated like snprintf
+        size_t room = s.len < s.buf.length ? s.buf.length - s.len : 0;
+        if (room) { cstr.memcpy(s.buf.ptr + s.len, str.ptr, room); s.len += room; }
+        return;
+    }
     cstr.memcpy(s.buf.ptr + s.len, str.ptr, str.length);
     s.len += str.length;
 }
@@ -339,10 +358,12 @@ void sb_put_uint(ref Sb s, ulong u) @nogc nothrow {
     foreach_reverse (k; 0 .. n) s.buf[s.len++] = tmp[k];
 }
 
-// Lower-case hex, no "0x". `min_digits` left-pads with '0'.
-void sb_put_hex(ref Sb s, ulong u, int min_digits = 0) @nogc nothrow {
+// Hex, no "0x". `min_digits` left-pads with '0'; `upper` for A-F.
+void sb_put_hex(ref Sb s, ulong u, int min_digits = 0, bool upper = false) @nogc nothrow {
     if (!s.ok) return;
-    static immutable char[16] D = "0123456789abcdef";
+    static immutable char[16] LO = "0123456789abcdef";
+    static immutable char[16] HI = "0123456789ABCDEF";
+    const(char)[16] D = upper ? HI : LO;
     char[16] tmp = void;
     size_t n = 0;
     do { tmp[n++] = D[u & 0xF]; u >>= 4; } while (u);

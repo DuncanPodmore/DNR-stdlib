@@ -51,6 +51,7 @@ src/dnr/
   bitset.d      BitArray!N (fixed) / BitSet (dynamic) + bits_* primitives
   ringbuf.d     RingBuffer!T — growable double-ended queue
   slotmap.d     SlotMap!T — pool with generation-checked handles
+  fmt.d         compile-time-checked {} formatting
   io.d          whole-file read/write + LineReader
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
@@ -191,7 +192,8 @@ slice must be valid): `parse_int` / `parse_uint` / `parse_hex` / `parse_float`
 `sb_put_int` / `sb_put_uint` / `sb_put_hex` / `sb_put_float` / `sb_put_rep`, all
 chainable and all no-ops once an allocation fails — `sb_reserve` returns
 `Status`, and `sb.ok` is the one check at the end. `sb_slice` is the contents;
-`sb_cstr` appends a `\0` without counting it.
+`sb_cstr` appends a `\0` without counting it. `sb_fixed(char[])` wraps a caller
+buffer (no allocator — overflow truncates and latches `ok` false).
 
 ## `dnr.hashmap` — `HashMap!(K, V)`
 
@@ -251,6 +253,25 @@ made safe.
 `slotmap_next`. `Handle.init` / `NULL_HANDLE` is the null handle (`gen == 0`
 is never live).
 
+## `dnr.fmt` — typed formatting
+
+The safe alternative to `snprintf`'s untyped varargs. The format string is a
+**template argument** — parsed at compile time, so a wrong placeholder count or
+a spec that can't apply to the argument type is a build error, not a garbled
+string.
+
+```d
+format!"lvl {} · {} kills · {}:{02}"(sb, level, kills, mins, secs);
+auto line = format_buf!"{}/{}"(buf[], a, b);   // -> const(char)[] in a stack buffer
+eprintln!"unexpected tag {x}"(tag);            // -> stderr + newline
+```
+
+Placeholders: `{}` (dispatched by type), `{x}` / `{X}` (hex), `{.N}` (float
+precision), `{0N}` (integer zero-pad), `{{` `}}` (literal braces). Default
+dispatch covers bool / char / integers / floats / `const(char)[]` /
+`const(char)*` / enum (→ member name) / pointers. Output goes through an `Sb`,
+so a fixed-buffer target truncates cleanly.
+
 ## `dnr.panic` — fail loudly and stop
 
 betterC keeps `assert` but gives you no message on `assert(0)` and no trace.
@@ -304,7 +325,7 @@ Thin `core.stdc.stdio` wrappers for the common jobs. Paths are `const(char)[]`
 - [x] `bitset` — `BitArray!N` / `BitSet` + `bits_*` primitives
 - [x] `ringbuf` — `RingBuffer!T`, a growable deque
 - [x] `slotmap` — `SlotMap!T`, generation-checked stable handles
-- [ ] `fmt` — compile-time-checked `{}` formatting into `Sb` / a fixed buffer
+- [x] `fmt` — compile-time-checked `{}` formatting into `Sb` / a fixed buffer
 - [ ] `hash` — expose FNV-1a + a stronger 64-bit hash + `hash_combine`
 - [ ] `ini` — `key = value` + `[section]` parse / write (replaces the game's
       hand-rolled `.cfg` loaders)
@@ -318,5 +339,5 @@ Vendor `src/dnr/` into your tree and add the files you use (plus their
 transitive imports) to your build's source list — no globbing, same as the
 game. Every module needs `panic` + `result`; `mem` pulls in nothing else;
 `array` / `str` / `hashmap` / `io` / `bitset` / `ringbuf` / `slotmap` pull in
-`mem`. Ship `dnr.testing` too if you want the same `check` harness for your own
-tests.
+`mem`; `fmt` pulls in `str`. Ship `dnr.testing` too if you want the same
+`check` harness for your own tests.
