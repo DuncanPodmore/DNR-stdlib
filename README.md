@@ -48,6 +48,9 @@ src/dnr/
   rng.d         xoshiro256** PRNG with explicit state
   str.d         slice ops + parsing + Sb (StringBuilder)
   hashmap.d     HashMap!(K,V) — open-addressed, Allocator-backed
+  bitset.d      BitArray!N (fixed) / BitSet (dynamic) + bits_* primitives
+  ringbuf.d     RingBuffer!T — growable double-ended queue
+  slotmap.d     SlotMap!T — pool with generation-checked handles
   io.d          whole-file read/write + LineReader
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
@@ -209,6 +212,45 @@ never recompute it.
 key's bytes must outlive the entry. Handle, not a value (copying aliases). POD
 — no element destructors.
 
+## `dnr.bitset` — packed bits
+
+A `bool[]` spends a byte per flag; these spend a bit.
+
+- `bits_set` / `bits_clear` / `bits_flip` / `bits_test` / `bits_count` /
+  `bits_first_set` / `bits_first_clear` — primitives over a raw `ulong[]`
+- `BitArray!N` — fixed, N bits inline, no allocator: `ba_set` / `ba_test` /
+  `ba_count` / `ba_any` / `ba_all` / `ba_first_set` / `ba_first_clear` /
+  `ba_set_all` / `ba_clear_all`, and `ba_iter` / `ba_next` (ascending set bits)
+- `BitSet` — the same over an `Allocator` (`bitset_make` → `Result!BitSet`,
+  `bitset_free`, `bitset_*` mirroring the fixed API)
+
+`set_all` / `count` respect the exact bit count, not the padded last word.
+
+## `dnr.ringbuf` — `RingBuffer!T`
+
+A FIFO / deque — `dnr.array` is a stack, this has O(1) push and pop at *both*
+ends. Power-of-two capacity (mask wrap), doubles when full. Elements are
+contiguous in ring order, not memory — index with `ring_at`.
+
+`ring_make` / `ring_free` / `ring_reserve` (→ `Status`) · `ring_push_back` /
+`ring_push_front` (→ `Status`) · `ring_pop_front` / `ring_pop_back`
+(→ `Option!T`) · `ring_front` / `ring_back` / `ring_at` (ref, assert) ·
+`ring_len` / `ring_cap` / `ring_empty` / `ring_clear`.
+
+## `dnr.slotmap` — `SlotMap!T`
+
+`Pool!T` hands out a `T*` that a slot reuse silently re-points. `SlotMap!T`
+returns a `Handle { uint index, gen }`; `slotmap_get` only resolves it while
+the generation still matches, so a handle to a removed entry reads `none`
+rather than aliasing whatever moved in. This is the game's `Enemy.uid` pattern
+made safe.
+
+`slotmap_insert` (→ `Result!Handle`) · `slotmap_get` (→ `Option!(T*)`) /
+`slotmap_contains` · `slotmap_remove` (→ `bool`, bumps the generation) ·
+`slotmap_len` / `slotmap_capacity` / `slotmap_clear` · `slotmap_iter` /
+`slotmap_next`. `Handle.init` / `NULL_HANDLE` is the null handle (`gen == 0`
+is never live).
+
 ## `dnr.panic` — fail loudly and stop
 
 betterC keeps `assert` but gives you no message on `assert(0)` and no trace.
@@ -257,10 +299,24 @@ Thin `core.stdc.stdio` wrappers for the common jobs. Paths are `const(char)[]`
 - [x] `io` — `read_file` / `write_file` / `append_file` / `file_size` / `file_exists`
       + the `LineReader` iterator
 
+**Tier 2 — in progress:**
+
+- [x] `bitset` — `BitArray!N` / `BitSet` + `bits_*` primitives
+- [x] `ringbuf` — `RingBuffer!T`, a growable deque
+- [x] `slotmap` — `SlotMap!T`, generation-checked stable handles
+- [ ] `fmt` — compile-time-checked `{}` formatting into `Sb` / a fixed buffer
+- [ ] `hash` — expose FNV-1a + a stronger 64-bit hash + `hash_combine`
+- [ ] `ini` — `key = value` + `[section]` parse / write (replaces the game's
+      hand-rolled `.cfg` loaders)
+- [ ] `utf8` — `decode` / `encode` / `validate` / `count_runes`
+- [ ] `time` — monotonic `now()` + `Duration` (first per-OS shim)
+- [ ] `mem` extras — a growing (block-chaining) arena; an aligned backend
+
 ## Using it in a project
 
 Vendor `src/dnr/` into your tree and add the files you use (plus their
 transitive imports) to your build's source list — no globbing, same as the
 game. Every module needs `panic` + `result`; `mem` pulls in nothing else;
-`str` / `hashmap` / `io` pull in `mem`. Ship `dnr.testing` too if you want the
-same `check` harness for your own tests.
+`array` / `str` / `hashmap` / `io` / `bitset` / `ringbuf` / `slotmap` pull in
+`mem`. Ship `dnr.testing` too if you want the same `check` harness for your own
+tests.
