@@ -152,47 +152,46 @@ Result!(T, E) err(T, E = StdErr)(E e) @nogc nothrow {
 }
 
 // ===========================================================================
-// Status — success or an error, no value
+// Status — success or a StdErr, no value
 // ===========================================================================
+// Not templated on the error type (unlike Option / Result): a value-less
+// fallible action in dnr-std always fails with a StdErr, and keeping Status
+// plain lets it be written bare as `res.Status`. Need a custom error with no
+// value? Use `Result!(bool, MyErr)`.
 
-struct Status(E = StdErr) {
-    private E    _err;
-    private bool _ok = false;
+struct Status {
+    private StdErr _err;
+    private bool   _ok = false;
 
     bool is_ok()  const @nogc nothrow { return _ok; }
     bool is_err() const @nogc nothrow { return !_ok; }
 
     void unwrap(string file = __FILE__, int line = __LINE__) @nogc nothrow {
-        if (!_ok) {
-            static if (is(E == StdErr))
-                pnc.panic(err_name(_err), file, line);
-            else
-                pnc.panic("Status.unwrap on an error", file, line);
-        }
+        if (!_ok) pnc.panic(err_name(_err), file, line);
     }
 
-    E unwrap_err(string file = __FILE__, int line = __LINE__) @nogc nothrow {
+    StdErr unwrap_err(string file = __FILE__, int line = __LINE__) @nogc nothrow {
         if (_ok) pnc.panic("Status.unwrap_err on an ok status", file, line);
         return _err;
     }
 
-    E err_or(E fallback) @nogc nothrow { return _ok ? fallback : _err; }
+    StdErr err_or(StdErr fallback) @nogc nothrow { return _ok ? fallback : _err; }
 
-    bool failed(ref E out_) @nogc nothrow {
+    bool failed(ref StdErr out_) @nogc nothrow {
         if (_ok) return false;
         out_ = _err;
         return true;
     }
 }
 
-Status!E pass(E = StdErr)() @nogc nothrow {
-    Status!E s;
+Status pass() @nogc nothrow {
+    Status s;
     s._ok = true;
     return s;
 }
 
-Status!E fail(E = StdErr)(E e) @nogc nothrow {
-    Status!E s;
+Status fail(StdErr e) @nogc nothrow {
+    Status s;
     s._err = e;
     return s;
 }

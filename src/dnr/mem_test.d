@@ -19,8 +19,8 @@ void test_make_unmake() {
     Tracker t;
     Allocator a = tracked(t);
 
-    Point* p = make!Point(a);
-    check(p !is null, "make returned null");
+    Point* p = make!Point(a).unwrap;
+    check(p !is null, "make returned a pointer");
     expect_eq(p.x, 7, "make: declared field initializer honoured");
     expect_eq(p.y, 0, "make: zero field");
     near(p.z, 1.5, 1e-6, "make: float initializer honoured (not NaN)");
@@ -36,13 +36,13 @@ void test_make_n() {
     Tracker t;
     Allocator a = tracked(t);
 
-    Point[] s = make_n!Point(a, 16);
+    Point[] s = make_n!Point(a, 16).unwrap;
     check(s.length == 16, "make_n length");
     bool allInit = true;
     foreach (ref e; s) if (e.x != 7 || e.z != 1.5f) allInit = false;
     check(allInit, "make_n: every element .init-filled");
 
-    check(make_n!Point(a, 0) is null, "make_n(0) is empty");
+    check(make_n!Point(a, 0).unwrap is null, "make_n(0) is empty");
 
     free_n(a, s);
     check(t.bytes_outstanding == 0, "free_n cleaned up");
@@ -52,21 +52,21 @@ void test_resize_n() {
     Tracker t;
     Allocator a = tracked(t);
 
-    int[] s = make_n!int(a, 4);
+    int[] s = make_n!int(a, 4).unwrap;
     foreach (i, ref e; s) e = cast(int) i + 1;
 
-    check(resize_n(a, s, 8), "grow succeeded");
+    check(resize_n(a, s, 8).is_ok(), "grow succeeded");
     check(s.length == 8, "grew to 8");
     expect_eq(s[0], 1, "old data survived grow");
     expect_eq(s[3], 4, "old data survived grow (last old)");
     expect_eq(s[4], 0, "new tail .init-filled");
     expect_eq(s[7], 0, "new tail .init-filled (last)");
 
-    check(resize_n(a, s, 2), "shrink succeeded");
+    check(resize_n(a, s, 2).is_ok(), "shrink succeeded");
     check(s.length == 2, "shrank to 2");
     expect_eq(s[1], 2, "data survived shrink");
 
-    check(resize_n(a, s, 0), "resize to 0 succeeded");
+    check(resize_n(a, s, 0).is_ok(), "resize to 0 succeeded");
     check(s is null, "resize to 0 nulls the slice");
     check(t.bytes_outstanding == 0, "resize chain left nothing");
 }
@@ -76,12 +76,12 @@ void test_dup() {
     Allocator a = tracked(t);
 
     immutable int[5] src = [10, 20, 30, 40, 50];
-    int[] copy = dup!int(a, src[]);
+    int[] copy = dup!int(a, src[]).unwrap;
     check(copy.length == 5, "dup length");
     check(copy.ptr !is src.ptr, "dup is a distinct block");
     expect_eq(copy[2], 30, "dup copied contents");
 
-    check(dup!int(a, null) is null, "dup of empty is empty");
+    check(dup!int(a, null).unwrap is null, "dup of empty is empty");
 
     free_n(a, copy);
     check(t.bytes_outstanding == 0, "dup freed");
@@ -93,9 +93,9 @@ void test_arena_basic() {
     ar.buf = backing[];
     Allocator a = arena_allocator(ar);
 
-    int* x = make!int(a);
+    int* x = make!int(a).unwrap;
     *x = 42;
-    long* y = make!long(a);
+    long* y = make!long(a).unwrap;
     *y = 99;
 
     check(arena_used(ar) >= int.sizeof + long.sizeof, "arena advanced");
@@ -146,10 +146,10 @@ void test_arena_realloc_last() {
     ar.buf = backing[];
     Allocator a = arena_allocator(ar);
 
-    int[] s = make_n!int(a, 2);
+    int[] s = make_n!int(a, 2).unwrap;
     s[0] = 1; s[1] = 2;
     void* p0 = s.ptr;
-    check(resize_n(a, s, 4), "arena grow of the last block");
+    check(resize_n(a, s, 4).is_ok(), "arena grow of the last block");
     check(s.ptr is p0, "arena grew the last block in place");
     expect_eq(s[0], 1, "data survived in-place grow");
     expect_eq(s[2], 0, "grown tail .init-filled");
@@ -160,7 +160,7 @@ void test_pool() {
     Allocator a = tracked(t);
 
     Pool!Point p;
-    check(pool_alloc_storage(p, a, 3), "pool storage allocated");
+    check(pool_alloc_storage(p, a, 3).is_ok(), "pool storage allocated");
     check(pool_capacity(p) == 3, "pool capacity");
     check(pool_available(p) == 3, "pool starts fully available");
 
@@ -203,11 +203,11 @@ void test_tracker_peak() {
     Tracker t;
     Allocator a = tracked(t);
 
-    int[] s1 = make_n!int(a, 100);   // 400 bytes
-    int[] s2 = make_n!int(a, 100);   // 800 total
+    int[] s1 = make_n!int(a, 100).unwrap;   // 400 bytes
+    int[] s2 = make_n!int(a, 100).unwrap;   // 800 total
     check(t.peak_bytes >= 800, "tracker recorded the peak");
     free_n(a, s1);
-    int[] s3 = make_n!int(a, 10);    // back down then up a little
+    int[] s3 = make_n!int(a, 10).unwrap;    // back down then up a little
     check(t.peak_bytes >= 800, "peak is a high-water mark, never drops");
     check(t.total_allocs == 3, "total_allocs counts every alloc");
     free_n(a, s2);

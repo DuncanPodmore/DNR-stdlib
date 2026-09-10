@@ -17,6 +17,8 @@ module dnr.algo;
 // The default comparator. Guarded so it still *compiles* as the default
 // argument of `sort!P` etc. for a P with no `<` — you just can't call those
 // without an explicit `less` (it asserts if you do).
+import res = dnr.result;
+
 private bool default_less(T)(const T a, const T b) @nogc nothrow {
     static if (__traits(compiles, () { bool r = a < b; }))
         return a < b;
@@ -57,14 +59,14 @@ void rotate_left(T)(T[] s, size_t n) @nogc nothrow {
 // scan
 // ---------------------------------------------------------------------------
 
-// Index of the first element equal to `v`, or -1.
-ptrdiff_t index_of(T)(const(T)[] s, const T v) @nogc nothrow {
-    foreach (i, ref e; s) if (e == v) return cast(ptrdiff_t) i;
-    return -1;
+// Index of the first element equal to `v`, or `none`.
+res.Option!size_t index_of(T)(const(T)[] s, const T v) @nogc nothrow {
+    foreach (i, ref e; s) if (e == v) return res.some(i);
+    return res.none!size_t();
 }
 
 bool contains(T)(const(T)[] s, const T v) @nogc nothrow {
-    return index_of(s, v) >= 0;
+    return index_of(s, v).is_some();
 }
 
 // How many elements equal `v`.
@@ -80,18 +82,18 @@ bool equal(T)(const(T)[] a, const(T)[] b) @nogc nothrow {
     return true;
 }
 
-// Index of the min / max element. -1 on an empty slice. Ties go to the first.
-ptrdiff_t min_index(T)(const(T)[] s, bool function(const(T), const(T)) @nogc nothrow less = &default_less!T) @nogc nothrow {
-    if (s.length == 0) return -1;
+// Index of the min / max element, or `none` on an empty slice. Ties -> first.
+res.Option!size_t min_index(T)(const(T)[] s, bool function(const(T), const(T)) @nogc nothrow less = &default_less!T) @nogc nothrow {
+    if (s.length == 0) return res.none!size_t();
     size_t best = 0;
     foreach (i; 1 .. s.length) if (less(s[i], s[best])) best = i;
-    return cast(ptrdiff_t) best;
+    return res.some(best);
 }
-ptrdiff_t max_index(T)(const(T)[] s, bool function(const(T), const(T)) @nogc nothrow less = &default_less!T) @nogc nothrow {
-    if (s.length == 0) return -1;
+res.Option!size_t max_index(T)(const(T)[] s, bool function(const(T), const(T)) @nogc nothrow less = &default_less!T) @nogc nothrow {
+    if (s.length == 0) return res.none!size_t();
     size_t best = 0;
     foreach (i; 1 .. s.length) if (less(s[best], s[i])) best = i;
-    return cast(ptrdiff_t) best;
+    return res.some(best);
 }
 
 bool is_sorted(T)(const(T)[] s, bool function(const(T), const(T)) @nogc nothrow less = &default_less!T) @nogc nothrow {
@@ -204,9 +206,9 @@ size_t upper_bound(T)(const(T)[] s, const T v, bool function(const(T), const(T))
 }
 
 // Index of some element equal to `v` (equality = `!less(a,b) && !less(b,a)`),
-// or -1. O(log n).
-ptrdiff_t binary_search(T)(const(T)[] s, const T v, bool function(const(T), const(T)) @nogc nothrow less = &default_less!T) @nogc nothrow {
+// or `none`. O(log n).
+res.Option!size_t binary_search(T)(const(T)[] s, const T v, bool function(const(T), const(T)) @nogc nothrow less = &default_less!T) @nogc nothrow {
     size_t i = lower_bound(s, v, less);
-    if (i < s.length && !less(v, s[i])) return cast(ptrdiff_t) i;
-    return -1;
+    if (i < s.length && !less(v, s[i])) return res.some(i);
+    return res.none!size_t();
 }

@@ -15,7 +15,9 @@ void test_push_grow() {
     Tracker t;
     Array!int a = array_make!int(tracked(t));
 
-    foreach (i; 0 .. 100) check(array_push(a, i * 10), "push succeeded");
+    bool allPushed = true;
+    foreach (i; 0 .. 100) if (array_push(a, i * 10).is_err) allPushed = false;
+    check(allPushed, "100 pushes all succeeded");
     check(array_len(a) == 100, "length after 100 pushes");
     check(a.cap >= 100, "capacity grew to fit");
     expect_eq(a.items[0], 0, "first element");
@@ -48,13 +50,13 @@ void test_pop_back() {
     array_push(a, 1); array_push(a, 2); array_push(a, 3);
 
     expect_eq(array_back(a), 3, "back is the last pushed");
-    expect_eq(array_pop(a), 3, "pop returns last");
-    expect_eq(array_pop(a), 2, "pop returns next");
+    expect_eq(array_pop(a).unwrap(), 3, "pop returns last");
+    expect_eq(array_pop(a).unwrap(), 2, "pop returns next");
     check(array_len(a) == 1, "length dropped");
 
     int v;
-    check(array_try_pop(a, v) && v == 1, "try_pop drains the last");
-    check(!array_try_pop(a, v), "try_pop on empty is false");
+    check(array_pop(a).take(v) && v == 1, "pop drains the last");
+    check(array_pop(a).is_none(), "pop on empty is none");
     check(array_empty(a), "empty after draining");
 
     array_free(a);
@@ -66,10 +68,10 @@ void test_append() {
     Array!int a = array_make!int(tracked(t));
     array_push(a, 1);
     immutable int[3] more = [2, 3, 4];
-    check(array_append(a, more[]), "append succeeded");
+    check(array_append(a, more[]).is_ok(), "append succeeded");
     check(array_len(a) == 4, "length after append");
     expect_eq(a.items[3], 4, "appended tail correct");
-    check(array_append(a, null), "append of empty is a no-op success");
+    check(array_append(a, null).is_ok(), "append of empty is a no-op success");
 
     array_free(a);
     check(t.bytes_outstanding == 0, "freed clean");
@@ -80,12 +82,12 @@ void test_insert_remove() {
     Array!int a = array_make!int(tracked(t));
     foreach (i; 0 .. 5) array_push(a, i);        // 0 1 2 3 4
 
-    check(array_insert(a, 2, 99), "insert mid");   // 0 1 99 2 3 4
+    check(array_insert(a, 2, 99).is_ok(), "insert mid");   // 0 1 99 2 3 4
     check(array_len(a) == 6, "length after insert");
     expect_eq(a.items[2], 99, "inserted value in place");
     expect_eq(a.items[3], 2, "tail shifted up");
 
-    check(array_insert(a, array_len(a), 7), "insert at end");  // ... 4 7
+    check(array_insert(a, array_len(a), 7).is_ok(), "insert at end");  // ... 4 7
     expect_eq(array_back(a), 7, "end insert lands last");
 
     array_remove(a, 2);                            // 0 1 2 3 4 7
@@ -121,12 +123,12 @@ void test_resize_clear() {
     Array!int a = array_make!int(tracked(t));
     foreach (i; 0 .. 4) array_push(a, i + 1);      // 1 2 3 4
 
-    check(array_resize(a, 7), "grow via resize");
+    check(array_resize(a, 7).is_ok(), "grow via resize");
     check(array_len(a) == 7, "length grew");
     expect_eq(a.items[3], 4, "old data kept");
     expect_eq(a.items[6], 0, "grown tail .init-filled");
 
-    check(array_resize(a, 2), "shrink via resize");
+    check(array_resize(a, 2).is_ok(), "shrink via resize");
     check(array_len(a) == 2, "length shrank");
     check(a.cap >= 7, "capacity retained on shrink");
 
@@ -142,7 +144,7 @@ void test_from_and_shrink() {
     Tracker t;
     Allocator al = tracked(t);
     immutable int[4] src = [10, 20, 30, 40];
-    Array!int a = array_from!int(al, src[]);
+    Array!int a = array_from!int(al, src[]).unwrap;
     check(array_len(a) == 4, "array_from length");
     check(a.items.ptr !is src.ptr, "array_from is a distinct block");
     expect_eq(a.items[2], 30, "array_from copied");
@@ -165,7 +167,7 @@ void test_struct_elements() {
     Array!Vec2 a = array_make!Vec2(tracked(t));
     array_push(a, Vec2(1, 2));
     array_push(a, Vec2(3, 4));
-    check(array_resize(a, 4), "grow struct array");
+    check(array_resize(a, 4).is_ok(), "grow struct array");
     // resize must .init-fill, and Vec2.init is (0,0) not (NaN,NaN)
     near(a.items[3].x, 0, 1e-9, "grown struct tail is zero, not NaN");
     near(a.items[3].y, 0, 1e-9, "grown struct tail is zero, not NaN");

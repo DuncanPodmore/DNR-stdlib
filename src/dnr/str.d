@@ -9,7 +9,7 @@ module dnr.str;
 //   1. slice ops on `const(char)[]` — views, no allocation (equals /
 //      starts_with / trim / find / the Splitter iterator / ASCII classify)
 //   2. parsing — text to number (parse_int / parse_uint / parse_hex /
-//      parse_float), each `-> bool` with the value in an out-parameter
+//      parse_float), each returning `Result!T`
 //   3. Sb — a StringBuilder over an Allocator, for formatting
 //
 // A "string" here is `const(char)[]`: a slice, NOT null-terminated. Use
@@ -19,6 +19,7 @@ module dnr.str;
 // betterC: @nogc nothrow throughout.
 
 import mem = dnr.mem;
+import res = dnr.result;
 import cstr = core.stdc.string;
 import cstdio = core.stdc.stdio;
 import cstdlib = core.stdc.stdlib;
@@ -50,28 +51,28 @@ bool ends_with(const(char)[] s, const(char)[] suffix) @nogc nothrow {
     return s.length >= suffix.length && equals(s[$ - suffix.length .. $], suffix);
 }
 
-// Byte index of the first `c`, or -1.
-ptrdiff_t index_of(const(char)[] s, char c) @nogc nothrow {
-    foreach (i, ch; s) if (ch == c) return cast(ptrdiff_t) i;
-    return -1;
+// Byte index of the first `c`, or `none`.
+res.Option!size_t index_of(const(char)[] s, char c) @nogc nothrow {
+    foreach (i, ch; s) if (ch == c) return res.some(i);
+    return res.none!size_t();
 }
 
-// Byte index of the first occurrence of `sub`, or -1. Empty `sub` -> 0.
-ptrdiff_t index_of(const(char)[] s, const(char)[] sub) @nogc nothrow {
-    if (sub.length == 0) return 0;
-    if (sub.length > s.length) return -1;
+// Byte index of the first occurrence of `sub`, or `none`. Empty `sub` -> 0.
+res.Option!size_t index_of(const(char)[] s, const(char)[] sub) @nogc nothrow {
+    if (sub.length == 0) return res.some!size_t(0);
+    if (sub.length > s.length) return res.none!size_t();
     foreach (i; 0 .. s.length - sub.length + 1)
-        if (cstr.memcmp(s.ptr + i, sub.ptr, sub.length) == 0) return cast(ptrdiff_t) i;
-    return -1;
+        if (cstr.memcmp(s.ptr + i, sub.ptr, sub.length) == 0) return res.some(i);
+    return res.none!size_t();
 }
 
-ptrdiff_t last_index_of(const(char)[] s, char c) @nogc nothrow {
-    foreach_reverse (i, ch; s) if (ch == c) return cast(ptrdiff_t) i;
-    return -1;
+res.Option!size_t last_index_of(const(char)[] s, char c) @nogc nothrow {
+    foreach_reverse (i, ch; s) if (ch == c) return res.some(i);
+    return res.none!size_t();
 }
 
-bool contains(const(char)[] s, const(char)[] sub) @nogc nothrow { return index_of(s, sub) >= 0; }
-bool contains(const(char)[] s, char c) @nogc nothrow { return index_of(s, c) >= 0; }
+bool contains(const(char)[] s, const(char)[] sub) @nogc nothrow { return index_of(s, sub).is_some(); }
+bool contains(const(char)[] s, char c) @nogc nothrow { return index_of(s, c).is_some(); }
 
 size_t count_char(const(char)[] s, char c) @nogc nothrow {
     size_t n = 0;
@@ -104,7 +105,7 @@ const(char)[] strip_suffix(const(char)[] s, const(char)[] suffix) @nogc nothrow 
 // Idiom:
 //   auto it = split(line, ',');
 //   const(char)[] field;
-//   while (next(it, field)) { ... }
+//   while (split_next(it).take(field)) { ... }
 
 struct Splitter {
     const(char)[] rest;
@@ -123,31 +124,33 @@ Splitter split_ws(const(char)[] s) @nogc nothrow {
     return Splitter(trim_left(s), 0, true, false);
 }
 
-bool next(ref Splitter it, ref const(char)[] field) @nogc nothrow {
-    if (it.done) return false;
+// The next field, or `none` when the iterator is spent.
+res.Option!(const(char)[]) split_next(ref Splitter it) @nogc nothrow {
+    if (it.done) return res.none!(const(char)[])();
 
     if (it.ws) {
-        if (it.rest.length == 0) { it.done = true; return false; }
+        if (it.rest.length == 0) { it.done = true; return res.none!(const(char)[])(); }
         size_t i = 0;
         while (i < it.rest.length && !is_space(it.rest[i])) i++;
-        field = it.rest[0 .. i];
+        const(char)[] field = it.rest[0 .. i];
         size_t j = i;
         while (j < it.rest.length && is_space(it.rest[j])) j++;
         it.rest = it.rest[j .. $];
         if (it.rest.length == 0) it.done = true;
-        return true;
+        return res.some(field);
     }
 
-    ptrdiff_t at = index_of(it.rest, it.sep);
-    if (at < 0) {
-        field = it.rest;
+    auto at = index_of(it.rest, it.sep);
+    size_t pos;
+    if (!at.take(pos)) {
+        const(char)[] field = it.rest;
         it.rest = it.rest[$ .. $];
         it.done = true;
-        return true;
+        return res.some(field);
     }
-    field = it.rest[0 .. at];
-    it.rest = it.rest[at + 1 .. $];
-    return true;
+    const(char)[] field = it.rest[0 .. pos];
+    it.rest = it.rest[pos + 1 .. $];
+    return res.some(field);
 }
 
 // --- ASCII classify / case --------------------------------------------
@@ -170,83 +173,77 @@ char to_upper(char c) @nogc nothrow { return is_lower(c) ? cast(char)(c - 32) : 
 // ===========================================================================
 // 2. parsing
 // ===========================================================================
-// Each returns false and leaves the out-parameter untouched on any malformed
-// input. The whole slice must be consumed — leading/trailing spaces included
-// would fail; `trim` first if that is not what you want.
+// Each returns `Result!T` — `StdErr.invalid` for malformed input,
+// `StdErr.overflow` when the value doesn't fit. The whole slice must be
+// valid: leading/trailing spaces fail, so `trim` first if that's not wanted.
 
-// Signed base-10. Accepts an optional leading '+' / '-'. Overflow -> false.
-bool parse_int(const(char)[] s, ref long out_) @nogc nothrow {
-    if (s.length == 0) return false;
+// Signed base-10. Accepts an optional leading '+' / '-'.
+res.Result!long parse_int(const(char)[] s) @nogc nothrow {
+    if (s.length == 0) return res.err!long(res.StdErr.invalid);
     bool neg = false;
     size_t i = 0;
     if (s[0] == '+' || s[0] == '-') { neg = s[0] == '-'; i = 1; }
-    if (i == s.length) return false;
+    if (i == s.length) return res.err!long(res.StdErr.invalid);
 
     ulong acc = 0;
     for (; i < s.length; i++) {
-        if (!is_digit(s[i])) return false;
+        if (!is_digit(s[i])) return res.err!long(res.StdErr.invalid);
         ulong d = cast(ulong)(s[i] - '0');
-        // guard against ulong overflow, then against long range
-        if (acc > (ulong.max - d) / 10) return false;
+        if (acc > (ulong.max - d) / 10) return res.err!long(res.StdErr.overflow);
         acc = acc * 10 + d;
     }
     if (neg) {
-        if (acc > cast(ulong) long.max + 1) return false;
-        out_ = -cast(long) acc;
-    } else {
-        if (acc > cast(ulong) long.max) return false;
-        out_ = cast(long) acc;
+        if (acc > cast(ulong) long.max + 1) return res.err!long(res.StdErr.overflow);
+        return res.ok(-cast(long) acc);
     }
-    return true;
+    if (acc > cast(ulong) long.max) return res.err!long(res.StdErr.overflow);
+    return res.ok(cast(long) acc);
 }
 
 // Unsigned base-10. A leading '+' is allowed, '-' is not.
-bool parse_uint(const(char)[] s, ref ulong out_) @nogc nothrow {
-    if (s.length == 0) return false;
+res.Result!ulong parse_uint(const(char)[] s) @nogc nothrow {
+    if (s.length == 0) return res.err!ulong(res.StdErr.invalid);
     size_t i = (s[0] == '+') ? 1 : 0;
-    if (i == s.length) return false;
+    if (i == s.length) return res.err!ulong(res.StdErr.invalid);
     ulong acc = 0;
     for (; i < s.length; i++) {
-        if (!is_digit(s[i])) return false;
+        if (!is_digit(s[i])) return res.err!ulong(res.StdErr.invalid);
         ulong d = cast(ulong)(s[i] - '0');
-        if (acc > (ulong.max - d) / 10) return false;
+        if (acc > (ulong.max - d) / 10) return res.err!ulong(res.StdErr.overflow);
         acc = acc * 10 + d;
     }
-    out_ = acc;
-    return true;
+    return res.ok(acc);
 }
 
-// Base-16, optional "0x" / "0X" prefix, case-insensitive. Overflow -> false.
-bool parse_hex(const(char)[] s, ref ulong out_) @nogc nothrow {
-    if (s.length == 0) return false;
+// Base-16, optional "0x" / "0X" prefix, case-insensitive.
+res.Result!ulong parse_hex(const(char)[] s) @nogc nothrow {
+    if (s.length == 0) return res.err!ulong(res.StdErr.invalid);
     if (s.length >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s = s[2 .. $];
-    if (s.length == 0) return false;
+    if (s.length == 0) return res.err!ulong(res.StdErr.invalid);
     ulong acc = 0;
     foreach (c; s) {
-        if (!is_hex_digit(c)) return false;
+        if (!is_hex_digit(c)) return res.err!ulong(res.StdErr.invalid);
         uint d = is_digit(c) ? cast(uint)(c - '0')
                : cast(uint)(to_lower(c) - 'a' + 10);
-        if (acc > (ulong.max >> 4)) return false;
+        if (acc > (ulong.max >> 4)) return res.err!ulong(res.StdErr.overflow);
         acc = (acc << 4) | d;
     }
-    out_ = acc;
-    return true;
+    return res.ok(acc);
 }
 
 // Base-10 float, via the C library for correct rounding. The slice is copied
 // into a stack buffer (so a very long literal — over 127 chars — is rejected)
 // and `strtod` must consume all of it.
-bool parse_float(const(char)[] s, ref double out_) @nogc nothrow {
-    if (s.length == 0 || s.length > 127) return false;
-    if (is_space(s[0])) return false;   // strtod would skip it; we want strict
+res.Result!double parse_float(const(char)[] s) @nogc nothrow {
+    if (s.length == 0 || s.length > 127) return res.err!double(res.StdErr.invalid);
+    if (is_space(s[0])) return res.err!double(res.StdErr.invalid);  // strtod would skip it
     char[128] buf = void;
     cstr.memcpy(buf.ptr, s.ptr, s.length);
     buf[s.length] = 0;
     char* end;
     double v = cstdlib.strtod(buf.ptr, &end);
-    if (end != buf.ptr + s.length) return false;   // trailing junk, or nothing parsed
-    out_ = v;
-    return true;
+    if (end != buf.ptr + s.length) return res.err!double(res.StdErr.invalid);
+    return res.ok(v);
 }
 
 // ===========================================================================
@@ -267,7 +264,7 @@ struct Sb {
 Sb sb_make(mem.Allocator a, size_t reserve = 0) @nogc nothrow {
     Sb s;
     s.a = a;
-    if (reserve) sb_reserve(s, reserve);
+    if (reserve) cast(void) sb_reserve(s, reserve);
     return s;
 }
 
@@ -284,36 +281,38 @@ void sb_reset(ref Sb s) @nogc nothrow { s.len = 0; s.ok = true; }
 const(char)[] sb_slice(ref Sb s) @nogc nothrow { return s.buf[0 .. s.len]; }
 size_t sb_len(ref Sb s) @nogc nothrow { return s.len; }
 
-bool sb_reserve(ref Sb s, size_t want) @nogc nothrow {
-    if (!s.ok) return false;
-    if (want <= s.buf.length) return true;
+// `pass()`, or `StdErr.oom` (which also latches `s.ok` false so later put_*
+// calls no-op). Once you've built the string, `s.ok` is the single check.
+res.Status sb_reserve(ref Sb s, size_t want) @nogc nothrow {
+    if (!s.ok) return res.fail(res.StdErr.oom);
+    if (want <= s.buf.length) return res.pass();
     size_t cap = s.buf.length < 16 ? 16 : s.buf.length;
     while (cap < want) cap *= 2;
     void* p = s.buf.length
         ? s.a.raw_realloc(s.buf.ptr, s.buf.length, cap, 1)
         : s.a.raw_alloc(cap, 1);
-    if (p is null) { s.ok = false; return false; }
+    if (p is null) { s.ok = false; return res.fail(res.StdErr.oom); }
     s.buf = (cast(char*) p)[0 .. cap];
-    return true;
+    return res.pass();
 }
 
 void sb_put(ref Sb s, const(char)[] str) @nogc nothrow {
     if (!s.ok || str.length == 0) return;
-    if (!sb_reserve(s, s.len + str.length)) return;
+    if (sb_reserve(s, s.len + str.length).is_err) return;
     cstr.memcpy(s.buf.ptr + s.len, str.ptr, str.length);
     s.len += str.length;
 }
 
 void sb_put_char(ref Sb s, char c) @nogc nothrow {
     if (!s.ok) return;
-    if (!sb_reserve(s, s.len + 1)) return;
+    if (sb_reserve(s, s.len + 1).is_err) return;
     s.buf[s.len++] = c;
 }
 
 // c repeated n times.
 void sb_put_rep(ref Sb s, char c, size_t n) @nogc nothrow {
     if (!s.ok || n == 0) return;
-    if (!sb_reserve(s, s.len + n)) return;
+    if (sb_reserve(s, s.len + n).is_err) return;
     cstr.memset(s.buf.ptr + s.len, c, n);
     s.len += n;
 }
@@ -327,7 +326,7 @@ void sb_put_int(ref Sb s, long v) @nogc nothrow {
     do { tmp[n++] = cast(char)('0' + u % 10); u /= 10; } while (u);
     if (neg) tmp[n++] = '-';
     // digits are reversed in tmp
-    if (!sb_reserve(s, s.len + n)) return;
+    if (sb_reserve(s, s.len + n).is_err) return;
     foreach_reverse (k; 0 .. n) s.buf[s.len++] = tmp[k];
 }
 
@@ -336,7 +335,7 @@ void sb_put_uint(ref Sb s, ulong u) @nogc nothrow {
     char[24] tmp = void;
     size_t n = 0;
     do { tmp[n++] = cast(char)('0' + u % 10); u /= 10; } while (u);
-    if (!sb_reserve(s, s.len + n)) return;
+    if (sb_reserve(s, s.len + n).is_err) return;
     foreach_reverse (k; 0 .. n) s.buf[s.len++] = tmp[k];
 }
 
@@ -348,7 +347,7 @@ void sb_put_hex(ref Sb s, ulong u, int min_digits = 0) @nogc nothrow {
     size_t n = 0;
     do { tmp[n++] = D[u & 0xF]; u >>= 4; } while (u);
     while (cast(int) n < min_digits) tmp[n++] = '0';
-    if (!sb_reserve(s, s.len + n)) return;
+    if (sb_reserve(s, s.len + n).is_err) return;
     foreach_reverse (k; 0 .. n) s.buf[s.len++] = tmp[k];
 }
 
@@ -365,7 +364,7 @@ void sb_put_float(ref Sb s, double v, int prec = 6) @nogc nothrow {
 // until the next mutation of `s`.
 const(char)* sb_cstr(ref Sb s) @nogc nothrow {
     if (!s.ok) return "".ptr;
-    if (!sb_reserve(s, s.len + 1)) return "".ptr;
+    if (sb_reserve(s, s.len + 1).is_err) return "".ptr;
     s.buf[s.len] = 0;
     return s.buf.ptr;
 }

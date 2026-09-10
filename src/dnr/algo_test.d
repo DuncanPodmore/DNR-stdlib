@@ -3,8 +3,8 @@ module dnr.algo_test;
 import dnr.testing;
 import dnr.algo;
 
-// A throwaway LCG so the sort tests can hit non-trivial input without dnr.rng
-// (which doesn't exist yet).
+// A throwaway LCG so the sort tests can hit non-trivial input without taking a
+// dependency on dnr.rng.
 private struct Lcg { ulong s = 0x2545F4914F6CDD1D; }
 private uint next(ref Lcg r) @nogc nothrow {
     r.s = r.s * 6364136223846793005UL + 1442695040888963407UL;
@@ -46,9 +46,9 @@ void test_rotate() {
 
 void test_scan() {
     int[6] a = [3, 1, 4, 1, 5, 9];
-    check(index_of(a[], 4) == 2, "index_of hit");
-    check(index_of(a[], 1) == 1, "index_of returns the first match");
-    check(index_of(a[], 7) == -1, "index_of miss");
+    check(index_of(a[], 4).unwrap() == 2, "index_of hit");
+    check(index_of(a[], 1).unwrap() == 1, "index_of returns the first match");
+    check(index_of(a[], 7).is_none(), "index_of miss");
     check(contains(a[], 9), "contains hit");
     check(!contains(a[], 0), "contains miss");
     check(count(a[], 1) == 2, "count");
@@ -59,12 +59,12 @@ void test_scan() {
     int[2] c = [3, 1];
     check(!equal(a[], c[]), "equal detects a length mismatch");
 
-    check(min_index(a[]) == 1, "min_index");
-    check(max_index(a[]) == 5, "max_index");
-    check(min_index(a[], &desc_int) == 5, "min_index under a reversed comparator");
+    check(min_index(a[]).unwrap() == 1, "min_index");
+    check(max_index(a[]).unwrap() == 5, "max_index");
+    check(min_index(a[], &desc_int).unwrap() == 5, "min_index under a reversed comparator");
 
     int[0] empty;
-    check(min_index(empty[]) == -1, "min_index of empty");
+    check(min_index(empty[]).is_none(), "min_index of empty");
 }
 
 void test_is_sorted() {
@@ -152,21 +152,20 @@ void test_binary_search() {
     check(lower_bound(a[], 100) == 8, "lower_bound above everything");
     check(lower_bound(a[], 4) == 4, "lower_bound of an absent middle value");
 
-    ptrdiff_t hit = binary_search(a[], 7);
-    check(hit == 5, "binary_search finds 7");
-    check(binary_search(a[], 5) == 4, "binary_search finds 5");
-    check(binary_search(a[], 3) >= 1 && binary_search(a[], 3) <= 3, "binary_search finds some 3");
-    check(binary_search(a[], 2) == -1, "binary_search misses 2");
-    check(binary_search(a[], 12) == -1, "binary_search misses past the end");
+    check(binary_search(a[], 7).unwrap() == 5, "binary_search finds 7");
+    check(binary_search(a[], 5).unwrap() == 4, "binary_search finds 5");
+    check(binary_search(a[], 3).unwrap() >= 1 && binary_search(a[], 3).unwrap() <= 3, "binary_search finds some 3");
+    check(binary_search(a[], 2).is_none(), "binary_search misses 2");
+    check(binary_search(a[], 12).is_none(), "binary_search misses past the end");
 
     int[0] empty;
-    check(binary_search(empty[], 1) == -1, "binary_search of empty");
+    check(binary_search(empty[], 1).is_none(), "binary_search of empty");
 
     // consistency with a comparator-sorted slice
     int[5] d = [9, 7, 5, 3, 1];
     check(is_sorted(d[], &desc_int), "desc slice is sorted for the search");
-    check(binary_search(d[], 5, &desc_int) == 2, "binary_search under desc comparator");
-    check(binary_search(d[], 6, &desc_int) == -1, "binary_search desc miss");
+    check(binary_search(d[], 5, &desc_int).unwrap() == 2, "binary_search under desc comparator");
+    check(binary_search(d[], 6, &desc_int).is_none(), "binary_search desc miss");
 }
 
 void run_algo_tests() {

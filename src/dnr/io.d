@@ -17,6 +17,7 @@ module dnr.io;
 
 import mem = dnr.mem;
 import str = dnr.str;
+import res = dnr.result;
 import c = core.stdc.stdio;
 import cstr = core.stdc.string;
 
@@ -39,77 +40,78 @@ bool file_exists(const(char)[] path) @nogc nothrow {
     return true;
 }
 
-// File size in bytes, or -1 on error / non-seekable.
-long file_size(const(char)[] path) @nogc nothrow {
+// File size in bytes. `StdErr.not_found` / `StdErr.io` on failure.
+res.Result!long file_size(const(char)[] path) @nogc nothrow {
     char[PATH_MAX] cp = void;
-    if (!to_cpath(path, cp)) return -1;
+    if (!to_cpath(path, cp)) return res.err!long(res.StdErr.invalid);
     c.FILE* f = c.fopen(cp.ptr, "rb");
-    if (f is null) return -1;
+    if (f is null) return res.err!long(res.StdErr.not_found);
     long n = -1;
     if (c.fseek(f, 0, c.SEEK_END) == 0) {
         long t = c.ftell(f);
         if (t >= 0) n = t;
     }
     c.fclose(f);
-    return n;
+    return n < 0 ? res.err!long(res.StdErr.io) : res.ok(n);
 }
 
-// Read the whole file into a fresh buffer from `a`. Empty slice on any
-// failure (missing / unreadable / non-seekable / OOM). An empty *file*
-// succeeds and also returns an empty slice — call `file_exists` first if the
-// difference matters. Free with `mem.free_n(a, buf)`.
-ubyte[] read_file(mem.Allocator a, const(char)[] path) @nogc nothrow {
+// Read the whole file into a fresh buffer from `a`. On failure:
+// `StdErr.not_found` (missing), `StdErr.io` (unreadable / non-seekable),
+// `StdErr.oom`, `StdErr.invalid` (path too long). An empty *file* succeeds
+// with an empty slice. Free with `mem.free_n(a, buf)`.
+res.Result!(ubyte[]) read_file(mem.Allocator a, const(char)[] path) @nogc nothrow {
     char[PATH_MAX] cp = void;
-    if (!to_cpath(path, cp)) return null;
+    if (!to_cpath(path, cp)) return res.err!(ubyte[])(res.StdErr.invalid);
 
     c.FILE* f = c.fopen(cp.ptr, "rb");
-    if (f is null) return null;
+    if (f is null) return res.err!(ubyte[])(res.StdErr.not_found);
     scope (exit) c.fclose(f);
 
-    if (c.fseek(f, 0, c.SEEK_END) != 0) return null;
+    if (c.fseek(f, 0, c.SEEK_END) != 0) return res.err!(ubyte[])(res.StdErr.io);
     long end = c.ftell(f);
-    if (end < 0) return null;
-    if (c.fseek(f, 0, c.SEEK_SET) != 0) return null;
-    if (end == 0) return null;
+    if (end < 0) return res.err!(ubyte[])(res.StdErr.io);
+    if (c.fseek(f, 0, c.SEEK_SET) != 0) return res.err!(ubyte[])(res.StdErr.io);
+    if (end == 0) return res.ok!(ubyte[])(null);
 
-    ubyte[] buf = mem.make_n!ubyte(a, cast(size_t) end);
-    if (buf is null) return null;
+    auto bufR = mem.make_n!ubyte(a, cast(size_t) end);
+    if (bufR.is_err) return res.err!(ubyte[])(res.StdErr.oom);
+    ubyte[] buf = bufR.unwrap;
 
     size_t got = c.fread(buf.ptr, 1, buf.length, f);
     if (got != buf.length) {
         mem.free_n(a, buf);
-        return null;
+        return res.err!(ubyte[])(res.StdErr.io);
     }
-    return buf;
+    return res.ok(buf);
 }
 
 // Same, typed as text. (Bytes are not validated as UTF-8 — it's still just
 // the file's contents.)
-char[] read_file_text(mem.Allocator a, const(char)[] path) @nogc nothrow {
-    ubyte[] b = read_file(a, path);
-    return cast(char[]) b;
+res.Result!(char[]) read_file_text(mem.Allocator a, const(char)[] path) @nogc nothrow {
+    auto b = read_file(a, path);
+    return b.is_err ? res.err!(char[])(b.unwrap_err()) : res.ok(cast(char[]) b.unwrap);
 }
 
 // Write `data` to `path`, replacing it. Creates the file; does not create
-// missing parent directories. true on success.
-bool write_file(const(char)[] path, const(void)[] data) @nogc nothrow {
+// missing parent directories. `StdErr.io` / `StdErr.invalid` on failure.
+res.Status write_file(const(char)[] path, const(void)[] data) @nogc nothrow {
     return write_mode(path, data, "wb");
 }
 
 // Append `data` to `path` (creating it if absent).
-bool append_file(const(char)[] path, const(void)[] data) @nogc nothrow {
+res.Status append_file(const(char)[] path, const(void)[] data) @nogc nothrow {
     return write_mode(path, data, "ab");
 }
 
-private bool write_mode(const(char)[] path, const(void)[] data, const(char)* mode) @nogc nothrow {
+private res.Status write_mode(const(char)[] path, const(void)[] data, const(char)* mode) @nogc nothrow {
     char[PATH_MAX] cp = void;
-    if (!to_cpath(path, cp)) return false;
+    if (!to_cpath(path, cp)) return res.fail(res.StdErr.invalid);
     c.FILE* f = c.fopen(cp.ptr, mode);
-    if (f is null) return false;
+    if (f is null) return res.fail(res.StdErr.io);
     bool ok = true;
     if (data.length) ok = c.fwrite(data.ptr, 1, data.length, f) == data.length;
     if (c.fclose(f) != 0) ok = false;
-    return ok;
+    return ok ? res.pass() : res.fail(res.StdErr.io);
 }
 
 // --- line iteration over an in-memory buffer --------------------------
@@ -118,7 +120,7 @@ private bool write_mode(const(char)[] path, const(void)[] data, const(char)* mod
 // newline. An empty buffer yields nothing.
 //   auto it = lines(buf);
 //   const(char)[] ln;
-//   while (next_line(it, ln)) { ... }
+//   while (read_line(it).take(ln)) { ... }
 
 struct LineReader {
     const(char)[] rest;
@@ -131,16 +133,18 @@ LineReader lines(const(ubyte)[] buf) @nogc nothrow {
     return LineReader(cast(const(char)[]) buf);
 }
 
-bool next_line(ref LineReader it, ref const(char)[] line) @nogc nothrow {
-    if (it.rest.length == 0) return false;
-    ptrdiff_t nl = str.index_of(it.rest, '\n');
-    if (nl < 0) {
-        line = it.rest;
-        it.rest = it.rest[$ .. $];
-    } else {
+// The next line, or `none` at the end of the buffer.
+res.Option!(const(char)[]) read_line(ref LineReader it) @nogc nothrow {
+    if (it.rest.length == 0) return res.none!(const(char)[])();
+    const(char)[] line;
+    size_t nl;
+    if (str.index_of(it.rest, '\n').take(nl)) {
         line = it.rest[0 .. nl];
         it.rest = it.rest[nl + 1 .. $];
+    } else {
+        line = it.rest;
+        it.rest = it.rest[$ .. $];
     }
     if (line.length && line[$ - 1] == '\r') line = line[0 .. $ - 1];
-    return true;
+    return res.some(line);
 }

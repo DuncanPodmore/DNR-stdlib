@@ -24,6 +24,7 @@ module dnr.hashmap;
 
 import mem = dnr.mem;
 import mth = dnr.math;
+import res = dnr.result;
 import cstr = core.stdc.string;
 
 enum size_t HM_MIN_CAP = 8;
@@ -112,8 +113,9 @@ void hm_clear(K, V)(ref HashMap!(K, V) h) @nogc nothrow {
 
 private bool hm_grow(K, V)(ref HashMap!(K, V) h, size_t newCap) @nogc nothrow {
     alias Slot = HashMap!(K, V).Slot;
-    Slot[] fresh = mem.make_n!Slot(h.a, newCap);
-    if (fresh is null) return false;
+    auto freshR = mem.make_n!Slot(h.a, newCap);
+    if (freshR.is_err) return false;
+    Slot[] fresh = freshR.unwrap;
 
     Slot[] old = h.slots;
     h.slots = fresh;
@@ -129,13 +131,13 @@ private bool hm_grow(K, V)(ref HashMap!(K, V) h, size_t newCap) @nogc nothrow {
     return true;
 }
 
-// Insert or overwrite. false only on an allocation failure while growing (the
-// map is unchanged in that case).
-bool hm_put(K, V)(ref HashMap!(K, V) h, K key, V value) @nogc nothrow {
-    if (h.slots.length == 0 && !hm_grow(h, HM_MIN_CAP)) return false;
+// Insert or overwrite. `StdErr.oom` only on an allocation failure while
+// growing (the map is unchanged in that case).
+res.Status hm_put(K, V)(ref HashMap!(K, V) h, K key, V value) @nogc nothrow {
+    if (h.slots.length == 0 && !hm_grow(h, HM_MIN_CAP)) return res.fail(res.StdErr.oom);
     // grow before the load factor passes 0.75
     if ((h.count + 1) * 4 > h.slots.length * 3) {
-        if (!hm_grow(h, h.slots.length * 2)) return false;
+        if (!hm_grow(h, h.slots.length * 2)) return res.fail(res.StdErr.oom);
     }
 
     size_t hash = h.hashfn(key);
@@ -143,7 +145,7 @@ bool hm_put(K, V)(ref HashMap!(K, V) h, K key, V value) @nogc nothrow {
     while (h.slots[i].used) {
         if (h.slots[i].hash == hash && h.eqfn(h.slots[i].key, key)) {
             h.slots[i].value = value;               // overwrite
-            return true;
+            return res.pass();
         }
         i = (i + 1) & h.mask;
     }
@@ -152,29 +154,30 @@ bool hm_put(K, V)(ref HashMap!(K, V) h, K key, V value) @nogc nothrow {
     h.slots[i].hash = hash;
     h.slots[i].used = true;
     h.count++;
-    return true;
+    return res.pass();
 }
 
-// Pointer to the stored value, or null. Valid until the next insert/remove.
-V* hm_get(K, V)(ref HashMap!(K, V) h, K key) @nogc nothrow {
-    if (h.count == 0) return null;
+// The stored value by pointer (mutable, valid until the next insert/remove),
+// or `none`.
+res.Option!(V*) hm_get(K, V)(ref HashMap!(K, V) h, K key) @nogc nothrow {
+    if (h.count == 0) return res.none!(V*)();
     size_t hash = h.hashfn(key);
     size_t i = hash & h.mask;
     while (h.slots[i].used) {
         if (h.slots[i].hash == hash && h.eqfn(h.slots[i].key, key))
-            return &h.slots[i].value;
+            return res.some!(V*)(&h.slots[i].value);
         i = (i + 1) & h.mask;
     }
-    return null;
+    return res.none!(V*)();
 }
 
 bool hm_contains(K, V)(ref HashMap!(K, V) h, K key) @nogc nothrow {
-    return hm_get(h, key) !is null;
+    return hm_get(h, key).is_some();
 }
 
 V hm_get_or(K, V)(ref HashMap!(K, V) h, K key, V fallback) @nogc nothrow {
-    V* p = hm_get(h, key);
-    return p is null ? fallback : *p;
+    V* p;
+    return hm_get(h, key).take(p) ? *p : fallback;
 }
 
 // Remove `key`. true if it was present. Uses backward-shift so the table

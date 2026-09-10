@@ -4,6 +4,7 @@ import dnr.testing;
 import dnr.mem;
 import dnr.hashmap;
 import dnr.rng;
+import s = dnr.str;
 
 private Allocator tracked(ref Tracker t) { return tracking_allocator(t, malloc_allocator()); }
 
@@ -11,24 +12,24 @@ void test_put_get_overwrite() {
     Tracker t;
     auto h = hm_make!(int, int)(tracked(t));
 
-    check(hm_put(h, 1, 100), "put 1");
-    check(hm_put(h, 2, 200), "put 2");
-    check(hm_put(h, 3, 300), "put 3");
+    check(hm_put(h, 1, 100).is_ok(), "put 1");
+    check(hm_put(h, 2, 200).is_ok(), "put 2");
+    check(hm_put(h, 3, 300).is_ok(), "put 3");
     check(hm_len(h) == 3, "len after 3 puts");
 
-    check(*hm_get(h, 2) == 200, "get 2");
-    check(hm_get(h, 99) is null, "get absent -> null");
+    check(*hm_get(h, 2).unwrap() == 200, "get 2");
+    check(hm_get(h, 99).is_none(), "get absent -> null");
     check(hm_contains(h, 1) && !hm_contains(h, 99), "contains");
     check(hm_get_or(h, 3, -1) == 300, "get_or present");
     check(hm_get_or(h, 4, -1) == -1, "get_or absent");
 
-    check(hm_put(h, 2, 222), "overwrite 2");
+    check(hm_put(h, 2, 222).is_ok(), "overwrite 2");
     check(hm_len(h) == 3, "len unchanged by overwrite");
-    check(*hm_get(h, 2) == 222, "get sees the overwrite");
+    check(*hm_get(h, 2).unwrap() == 222, "get sees the overwrite");
 
     // mutate through the pointer
-    *hm_get(h, 1) += 5;
-    check(*hm_get(h, 1) == 105, "value is mutable through hm_get");
+    *hm_get(h, 1).unwrap() += 5;
+    check(*hm_get(h, 1).unwrap() == 105, "value is mutable through hm_get");
 
     hm_free(h);
     check(t.bytes_outstanding == 0, "hm_free clean");
@@ -40,18 +41,18 @@ void test_grow() {
     auto h = hm_make!(int, int)(tracked(t));
 
     bool allPut = true;
-    foreach (i; 0 .. 1000) if (!hm_put(h, i, i * 7)) allPut = false;
+    foreach (i; 0 .. 1000) if (hm_put(h, i, i * 7).is_err) allPut = false;
     check(allPut, "1000 bulk puts all succeeded");
     check(hm_len(h) == 1000, "len after 1000");
 
     bool allFound = true;
     foreach (i; 0 .. 1000) {
-        int* v = hm_get(h, i);
-        if (v is null || *v != i * 7) allFound = false;
+        int* v;
+        if (!hm_get(h, i).take(v) || *v != i * 7) allFound = false;
     }
     check(allFound, "every key survives the resizes");
-    check(hm_get(h, 1000) is null, "a never-inserted key is absent");
-    check(hm_get(h, -1) is null, "another absent key");
+    check(hm_get(h, 1000).is_none(), "a never-inserted key is absent");
+    check(hm_get(h, -1).is_none(), "another absent key");
 
     hm_free(h);
     check(t.bytes_outstanding == 0, "freed clean");
@@ -87,11 +88,11 @@ void test_remove_backshift() {
 
     bool restOk = true;
     foreach (i; [1, 2, 3, 6, 7, 8, 9]) {
-        int* v = hm_get(h, i);
-        if (v is null || *v != i * 11) restOk = false;
+        int* v;
+        if (!hm_get(h, i).take(v) || *v != i * 11) restOk = false;
     }
     check(restOk, "every surviving key still reachable after the shifts");
-    check(hm_get(h, 4) is null && hm_get(h, 5) is null && hm_get(h, 0) is null,
+    check(hm_get(h, 4).is_none() && hm_get(h, 5).is_none() && hm_get(h, 0).is_none(),
           "removed keys are gone");
 
     hm_free(h);
@@ -126,11 +127,12 @@ void test_remove_random_stress() {
     size_t refCount = 0;
     bool consistent = true;
     foreach (k; 0 .. 2000) {
-        int* v = hm_get(h, k);
+        int* v;
+        bool has = hm_get(h, k).take(v);
         if (present[k]) {
             refCount++;
-            if (v is null || *v != value[k]) consistent = false;
-        } else if (v !is null) {
+            if (!has || *v != value[k]) consistent = false;
+        } else if (has) {
             consistent = false;
         }
     }
@@ -149,15 +151,15 @@ void test_string_keys() {
     hm_put(h, "two", 2);
     hm_put(h, "three", 3);
 
-    check(*hm_get(h, "two") == 2, "string key get");
+    check(*hm_get(h, "two").unwrap() == 2, "string key get");
 
     // a distinct slice with the same contents must hit the same entry
     char[8] buf = "three\0\0\0";
-    check(*hm_get(h, buf[0 .. 5]) == 3, "string key compares by content, not identity");
+    check(*hm_get(h, buf[0 .. 5]).unwrap() == 3, "string key compares by content, not identity");
 
-    check(hm_get(h, "four") is null, "absent string key");
+    check(hm_get(h, "four").is_none(), "absent string key");
     hm_put(h, "two", 22);
-    check(*hm_get(h, "two") == 22 && hm_len(h) == 3, "string key overwrite");
+    check(*hm_get(h, "two").unwrap() == 22 && hm_len(h) == 3, "string key overwrite");
 
     hm_free(h);
     check(t.bytes_outstanding == 0, "freed clean");
@@ -196,10 +198,10 @@ void test_clear() {
 
     hm_clear(h);
     check(hm_len(h) == 0 && hm_empty(h), "clear empties");
-    check(hm_get(h, 5) is null, "no entries after clear");
+    check(hm_get(h, 5).is_none(), "no entries after clear");
 
     hm_put(h, 100, 1);
-    check(*hm_get(h, 100) == 1, "usable after clear");
+    check(*hm_get(h, 100).unwrap() == 1, "usable after clear");
     check(t.total_allocs == allocsAfterFill, "clear kept the slot storage");
 
     hm_free(h);
@@ -220,9 +222,9 @@ void test_struct_key() {
     hm_put(h, Point(3, 4), "b");
     hm_put(h, Point(-5, 7), "c");
 
-    check(hm_get(h, Point(3, 4)) !is null, "struct key found");
-    check(hm_get(h, Point(4, 3)) is null, "struct key eq is not commutative-collapsed");
-    check(*hm_get(h, Point(-5, 7)) == "c", "struct key value");
+    check(hm_get(h, Point(3, 4)).is_some(), "struct key found");
+    check(hm_get(h, Point(4, 3)).is_none(), "struct key eq is not commutative-collapsed");
+    check(s.equals(*hm_get(h, Point(-5, 7)).unwrap(), "c"), "struct key value");
 
     hm_free(h);
     check(t.bytes_outstanding == 0, "freed clean");

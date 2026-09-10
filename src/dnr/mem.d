@@ -22,6 +22,7 @@ module dnr.mem;
 
 import cstd = core.stdc.stdlib;
 import cstr = core.stdc.string;
+import res = dnr.result;
 
 alias AllocFn   = void* function(void* ctx, size_t size, size_t alignment) @nogc nothrow;
 alias ReallocFn = void* function(void* ctx, void* ptr, size_t oldSize, size_t newSize, size_t alignment) @nogc nothrow;
@@ -58,26 +59,30 @@ struct Allocator {
 // ---------------------------------------------------------------------------
 // typed helpers
 // ---------------------------------------------------------------------------
+// These report an allocation failure the dnr-std way — Result!(T*) / Result!(T[])
+// / Status — rather than a bare null. `raw_alloc` etc. above stay pointer-and-null
+// (they are the C-ABI primitive layer the vtable is built on).
 
-// One T, .init-filled. null on failure.
-T* make(T)(Allocator a) @nogc nothrow {
+// One T, .init-filled.
+res.Result!(T*) make(T)(Allocator a) @nogc nothrow {
     T* p = cast(T*) a.raw_alloc(T.sizeof, T.alignof);
-    if (p !is null) *p = T.init;
-    return p;
+    if (p is null) return res.err!(T*)(res.StdErr.oom);
+    *p = T.init;
+    return res.ok(p);
 }
 
 void unmake(T)(Allocator a, T* p) @nogc nothrow {
     a.raw_free(p, T.sizeof);
 }
 
-// A slice of n T, each .init-filled. Empty slice on n == 0 or on failure.
-T[] make_n(T)(Allocator a, size_t n) @nogc nothrow {
-    if (n == 0) return null;
+// A slice of n T, each .init-filled. n == 0 succeeds with an empty slice.
+res.Result!(T[]) make_n(T)(Allocator a, size_t n) @nogc nothrow {
+    if (n == 0) return res.ok!(T[])(null);
     T* p = cast(T*) a.raw_alloc(n * T.sizeof, T.alignof);
-    if (p is null) return null;
+    if (p is null) return res.err!(T[])(res.StdErr.oom);
     T[] s = p[0 .. n];
     foreach (ref e; s) e = T.init;
-    return s;
+    return res.ok(s);
 }
 
 void free_n(T)(Allocator a, T[] s) @nogc nothrow {
@@ -85,31 +90,31 @@ void free_n(T)(Allocator a, T[] s) @nogc nothrow {
 }
 
 // Grow / shrink `s` to newN T. On success `s` is replaced (the pointer may
-// move) and any new tail elements are .init-filled; returns true. On failure
-// `s` is unchanged; returns false. newN == 0 frees `s` and sets it null.
-bool resize_n(T)(Allocator a, ref T[] s, size_t newN) @nogc nothrow {
-    if (newN == 0) { free_n(a, s); s = null; return true; }
+// move) and any new tail elements are .init-filled. On failure `s` is
+// unchanged. newN == 0 frees `s` and sets it null.
+res.Status resize_n(T)(Allocator a, ref T[] s, size_t newN) @nogc nothrow {
+    if (newN == 0) { free_n(a, s); s = null; return res.pass(); }
     void* np = a.raw_realloc(s.ptr, s.length * T.sizeof, newN * T.sizeof, T.alignof);
-    if (np is null) return false;
+    if (np is null) return res.fail(res.StdErr.oom);
     size_t old = s.length;
     s = (cast(T*) np)[0 .. newN];
     for (size_t i = old; i < newN; i++) s[i] = T.init;
-    return true;
+    return res.pass();
 }
 
-// Copy `src` into a fresh block. Empty slice on empty input or on failure.
-T[] dup(T)(Allocator a, const(T)[] src) @nogc nothrow {
-    if (src.length == 0) return null;
+// Copy `src` into a fresh block. Empty input succeeds with an empty slice.
+res.Result!(T[]) dup(T)(Allocator a, const(T)[] src) @nogc nothrow {
+    if (src.length == 0) return res.ok!(T[])(null);
     T* p = cast(T*) a.raw_alloc(src.length * T.sizeof, T.alignof);
-    if (p is null) return null;
+    if (p is null) return res.err!(T[])(res.StdErr.oom);
     cstr.memcpy(p, src.ptr, src.length * T.sizeof);
-    return p[0 .. src.length];
+    return res.ok(p[0 .. src.length]);
 }
 
 // The escape hatch: `size` bytes of UNDEFINED memory for the caller to fill.
-void[] alloc_raw(Allocator a, size_t size, size_t alignment = 0) @nogc nothrow {
+res.Result!(void[]) alloc_raw(Allocator a, size_t size, size_t alignment = 0) @nogc nothrow {
     void* p = a.raw_alloc(size, alignment);
-    return p is null ? null : p[0 .. size];
+    return p is null ? res.err!(void[])(res.StdErr.oom) : res.ok!(void[])(p[0 .. size]);
 }
 
 // ---------------------------------------------------------------------------
@@ -223,13 +228,13 @@ void pool_init(T)(ref Pool!T p, T[] slots, uint[] freeStorage) @nogc nothrow {
         p.freeStack[i] = cast(uint) slots.length - 1 - i;
 }
 
-bool pool_alloc_storage(T)(ref Pool!T p, Allocator a, uint capacity) @nogc nothrow {
-    T[] s = make_n!T(a, capacity);
-    if (s is null && capacity > 0) return false;
-    uint[] f = make_n!uint(a, capacity);
-    if (f is null && capacity > 0) { free_n(a, s); return false; }
-    pool_init(p, s, f);
-    return true;
+res.Status pool_alloc_storage(T)(ref Pool!T p, Allocator a, uint capacity) @nogc nothrow {
+    auto sr = make_n!T(a, capacity);
+    if (sr.is_err) return res.fail(res.StdErr.oom);
+    auto fr = make_n!uint(a, capacity);
+    if (fr.is_err) { free_n(a, sr.unwrap); return res.fail(res.StdErr.oom); }
+    pool_init(p, sr.unwrap, fr.unwrap);
+    return res.pass();
 }
 void pool_free_storage(T)(ref Pool!T p, Allocator a) @nogc nothrow {
     free_n(a, p.slots);

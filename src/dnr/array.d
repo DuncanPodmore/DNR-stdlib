@@ -18,10 +18,12 @@ module dnr.array;
 // destructors at all; this matches that.)
 //
 // Growth is amortised: capacity doubles (from a floor of MIN_CAP), so N
-// pushes are O(N). Failure to allocate is a `false` return from any mutator
-// that can grow — the array is left exactly as it was.
+// pushes are O(N). A mutator that can grow returns a `Status` (or `Result`) —
+// `is_err` / `StdErr.oom` on an allocation failure, and the array is left
+// exactly as it was.
 
 import dnr.mem;
+import res = dnr.result;
 import cstr = core.stdc.string;
 
 enum size_t MIN_CAP = 8;
@@ -33,23 +35,26 @@ struct Array(T) {
 }
 
 // A fresh array. `reserve` slots are allocated up front (0 = allocate lazily
-// on the first push). Returns an empty array with a null block on OOM — the
-// first push will retry.
+// on the first push). If the reserve allocation fails the array still comes
+// back usable and empty — the first push retries — so this never errors;
+// call `array_reserve` explicitly when you need to know.
 Array!T array_make(T)(Allocator a, size_t reserve = 0) @nogc nothrow {
     Array!T r;
     r.a = a;
-    if (reserve > 0) array_reserve(r, reserve);
+    if (reserve > 0) cast(void) array_reserve(r, reserve);
     return r;
 }
 
-// Copy `src` into a new array sized exactly to it.
-Array!T array_from(T)(Allocator a, const(T)[] src) @nogc nothrow {
-    Array!T r = array_make!T(a, src.length);
-    if (src.length && r.cap >= src.length) {
+// Copy `src` into a new array sized exactly to it. `StdErr.oom` on failure.
+res.Result!(Array!T) array_from(T)(Allocator a, const(T)[] src) @nogc nothrow {
+    Array!T r;
+    r.a = a;
+    if (src.length) {
+        if (array_reserve(r, src.length).is_err) return res.err!(Array!T)(res.StdErr.oom);
         cstr.memcpy(r.items.ptr, src.ptr, src.length * T.sizeof);
         r.items = r.items.ptr[0 .. src.length];
     }
-    return r;
+    return res.ok(r);
 }
 
 // Release the block. The array is empty and reusable afterwards (a push
@@ -63,10 +68,10 @@ void array_free(T)(ref Array!T arr) @nogc nothrow {
 size_t array_len(T)(ref const Array!T arr) @nogc nothrow { return arr.items.length; }
 bool   array_empty(T)(ref const Array!T arr) @nogc nothrow { return arr.items.length == 0; }
 
-// Make room for at least `want` slots total. true on success (or if the
-// capacity was already there), false on OOM (array unchanged).
-bool array_reserve(T)(ref Array!T arr, size_t want) @nogc nothrow {
-    if (want <= arr.cap) return true;
+// Make room for at least `want` slots total. `pass()` on success (or if the
+// capacity was already there), `StdErr.oom` on failure (array unchanged).
+res.Status array_reserve(T)(ref Array!T arr, size_t want) @nogc nothrow {
+    if (want <= arr.cap) return res.pass();
     size_t newCap = arr.cap < MIN_CAP ? MIN_CAP : arr.cap;
     while (newCap < want) newCap *= 2;
 
@@ -74,63 +79,59 @@ bool array_reserve(T)(ref Array!T arr, size_t want) @nogc nothrow {
     void* p = arr.cap
         ? arr.a.raw_realloc(arr.items.ptr, arr.cap * T.sizeof, newCap * T.sizeof, T.alignof)
         : arr.a.raw_alloc(newCap * T.sizeof, T.alignof);
-    if (p is null) return false;
+    if (p is null) return res.fail(res.StdErr.oom);
 
     arr.items = (cast(T*) p)[0 .. len];
     arr.cap = newCap;
-    return true;
+    return res.pass();
 }
 
-// Append one. false on OOM.
-bool array_push(T)(ref Array!T arr, T v) @nogc nothrow {
-    if (!array_reserve(arr, arr.items.length + 1)) return false;
+// Append one. `StdErr.oom` on failure.
+res.Status array_push(T)(ref Array!T arr, T v) @nogc nothrow {
+    if (array_reserve(arr, arr.items.length + 1).is_err) return res.fail(res.StdErr.oom);
     size_t i = arr.items.length;
     arr.items = arr.items.ptr[0 .. i + 1];
     arr.items[i] = v;
-    return true;
+    return res.pass();
 }
 
-// Append many. false on OOM (array unchanged — the reserve happens first).
-bool array_append(T)(ref Array!T arr, const(T)[] xs) @nogc nothrow {
-    if (xs.length == 0) return true;
-    if (!array_reserve(arr, arr.items.length + xs.length)) return false;
+// Append many. `StdErr.oom` on failure (array unchanged — reserve happens first).
+res.Status array_append(T)(ref Array!T arr, const(T)[] xs) @nogc nothrow {
+    if (xs.length == 0) return res.pass();
+    if (array_reserve(arr, arr.items.length + xs.length).is_err) return res.fail(res.StdErr.oom);
     size_t i = arr.items.length;
     cstr.memcpy(arr.items.ptr + i, xs.ptr, xs.length * T.sizeof);
     arr.items = arr.items.ptr[0 .. i + xs.length];
-    return true;
+    return res.pass();
 }
 
-// Remove and return the last element. Asserts non-empty.
-T array_pop(T)(ref Array!T arr) @nogc nothrow {
-    assert(arr.items.length > 0, "array_pop: empty");
+// Remove and return the last element, or `none` if empty.
+res.Option!T array_pop(T)(ref Array!T arr) @nogc nothrow {
+    if (arr.items.length == 0) return res.none!T();
     size_t i = arr.items.length - 1;
     T v = arr.items[i];
     arr.items = arr.items.ptr[0 .. i];
-    return v;
+    return res.some(v);
 }
 
-// Pop into `out_`, or return false if empty (no assert).
-bool array_try_pop(T)(ref Array!T arr, ref T out_) @nogc nothrow {
-    if (arr.items.length == 0) return false;
-    out_ = array_pop(arr);
-    return true;
-}
-
+// The last element by reference. Asserts non-empty — a precondition-guarded
+// accessor, like `arr.items[i]`; use `array_pop` / `array_len` when you're
+// not sure.
 ref T array_back(T)(ref Array!T arr) @nogc nothrow {
     assert(arr.items.length > 0, "array_back: empty");
     return arr.items[arr.items.length - 1];
 }
 
-// Insert `v` at index `i` (0..len), shifting the tail up. false on OOM.
-bool array_insert(T)(ref Array!T arr, size_t i, T v) @nogc nothrow {
+// Insert `v` at index `i` (0..len), shifting the tail up. `StdErr.oom` on failure.
+res.Status array_insert(T)(ref Array!T arr, size_t i, T v) @nogc nothrow {
     size_t len = arr.items.length;
     assert(i <= len, "array_insert: index out of range");
-    if (!array_reserve(arr, len + 1)) return false;
+    if (array_reserve(arr, len + 1).is_err) return res.fail(res.StdErr.oom);
     arr.items = arr.items.ptr[0 .. len + 1];
     if (i < len)
         cstr.memmove(arr.items.ptr + i + 1, arr.items.ptr + i, (len - i) * T.sizeof);
     arr.items[i] = v;
-    return true;
+    return res.pass();
 }
 
 // Remove index `i`, shifting the tail down — order preserved, O(n).
@@ -152,14 +153,14 @@ void array_swap_remove(T)(ref Array!T arr, size_t i) @nogc nothrow {
 }
 
 // Set the length. Growing .init-fills the new tail (no NaN floats); shrinking
-// just drops the count (capacity kept). false on OOM when growing.
-bool array_resize(T)(ref Array!T arr, size_t n) @nogc nothrow {
+// just drops the count (capacity kept). `StdErr.oom` when growing fails.
+res.Status array_resize(T)(ref Array!T arr, size_t n) @nogc nothrow {
     size_t len = arr.items.length;
-    if (n <= len) { arr.items = arr.items.ptr[0 .. n]; return true; }
-    if (!array_reserve(arr, n)) return false;
+    if (n <= len) { arr.items = arr.items.ptr[0 .. n]; return res.pass(); }
+    if (array_reserve(arr, n).is_err) return res.fail(res.StdErr.oom);
     arr.items = arr.items.ptr[0 .. n];
     for (size_t i = len; i < n; i++) arr.items[i] = T.init;
-    return true;
+    return res.pass();
 }
 
 // Length to 0, capacity untouched. (No element destructors — see the header.)

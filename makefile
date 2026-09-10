@@ -5,8 +5,15 @@ CC = ldc2
 CFLAGS = -betterC -mscrtlib=msvcrt
 OUT = build
 
-LIB_SRC  = src/dnr/panic.d src/dnr/result.d src/dnr/mem.d src/dnr/array.d src/dnr/algo.d src/dnr/math.d src/dnr/rng.d src/dnr/str.d src/dnr/hashmap.d src/dnr/io.d src/dnr/testing.d
-TEST_SRC = $(LIB_SRC) src/dnr/result_test.d src/dnr/mem_test.d src/dnr/array_test.d src/dnr/algo_test.d src/dnr/math_test.d src/dnr/rng_test.d src/dnr/str_test.d src/dnr/hashmap_test.d src/dnr/panic_test.d src/dnr/io_test.d src/test_all.d
+# Listed in dependency order (panic + result underpin everything).
+LIB_SRC  = src/dnr/testing.d src/dnr/panic.d src/dnr/result.d src/dnr/mem.d \
+           src/dnr/array.d src/dnr/algo.d src/dnr/math.d src/dnr/rng.d \
+           src/dnr/str.d src/dnr/hashmap.d src/dnr/io.d
+TEST_SRC = $(LIB_SRC) \
+           src/dnr/result_test.d src/dnr/mem_test.d src/dnr/array_test.d \
+           src/dnr/algo_test.d src/dnr/math_test.d src/dnr/rng_test.d \
+           src/dnr/str_test.d src/dnr/hashmap_test.d src/dnr/panic_test.d \
+           src/dnr/io_test.d src/test_all.d
 
 test: $(TEST_SRC)
 	$(CC) $(CFLAGS) $(TEST_SRC) -of $(OUT)/test
