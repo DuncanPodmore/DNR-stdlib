@@ -36,6 +36,7 @@ src/dnr/
   algo.d        sort / search / rearrange over slices
   math.d        scalar helpers — min/max/clamp, lerp, angle wrap, pow2
   rng.d         xoshiro256** PRNG with explicit state
+  str.d         slice ops + parsing + Sb (StringBuilder)
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
@@ -139,6 +140,27 @@ floats in `[0, 1)`) · `below(bound)` (unbiased) / `range_i(lo, hi)` /
 `range_f(lo, hi)` / `chance(p)` / `sign` · `pick(slice)` / `shuffle(slice)`
 (Fisher-Yates). Not cryptographic.
 
+## `dnr.str` — strings for betterC
+
+A "string" is `const(char)[]` — a slice, **not** null-terminated. `from_cstr`
+crosses in from C, `Sb.cstr` crosses back. ASCII only. Three parts:
+
+**Slice ops** (views, no allocation): `equals` / `equals_ci` / `starts_with` /
+`ends_with` · `index_of` (char or substring) / `last_index_of` / `contains` /
+`count_char` · `trim` / `trim_left` / `trim_right` / `strip_prefix` /
+`strip_suffix` · the `Splitter` iterator — `split(s, ',')` / `split_ws(s)` then
+`while (next(it, field))` · classify: `is_space` / `is_digit` / `is_alpha` / … /
+`to_lower` / `to_upper`.
+
+**Parsing** (each `-> bool`, value in an out-param, whole slice must be valid):
+`parse_int` / `parse_uint` / `parse_hex` (overflow-checked) / `parse_float`
+(via `strtod` for correct rounding).
+
+**`Sb`** — a StringBuilder over an `Allocator`. `sb_put` / `sb_put_char` /
+`sb_put_int` / `sb_put_uint` / `sb_put_hex` / `sb_put_float` / `sb_put_rep`, all
+chainable and all no-ops once an allocation fails — check `sb.ok` once at the
+end. `sb_slice` is the contents; `sb_cstr` appends a `\0` without counting it.
+
 ## Roadmap
 
 **Tier 0** (foundation) — **complete:**
@@ -155,8 +177,8 @@ floats in `[0, 1)`) · `below(bound)` (unbiased) / `range_i(lo, hi)` /
 
 - [x] `rng` — xoshiro256** PRNG, explicit state, ranges / `chance` / `pick` /
       `shuffle`
-- [ ] `str` — `StringBuilder`, split/trim/starts_with over `const(char)[]`,
-      int/float ⇄ string
+- [x] `str` — slice ops (`equals` / `trim` / `Splitter` / classify), parsing
+      (`parse_int` / `parse_float` / …), and `Sb` (a StringBuilder)
 - [ ] `hashmap` — `HashMap!(K,V)`, open-addressed, `Allocator`-backed
 - [ ] `io` — thin `FILE*` wrappers: read-whole-file, line iterator, buffered writer
 - [ ] `option` / `result` / `panic` — `Option!T`, `Result!(T,E)`, a `panic()` that
