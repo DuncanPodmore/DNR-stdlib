@@ -1,5 +1,9 @@
 # dnr-std — D no-runtime standard
 
+> **Written with AI.** Every module here was implemented by Claude (Anthropic's
+> Sonnet) working from the author's design direction and review, not hand-typed.
+> If that matters to you, now you know before you read the code.
+
 A small standard library for **D compiled with `-betterC`** — no druntime, no
 GC, no Phobos. Extracted from the patterns that carried the *Dopashooter* game,
 and built to the same imperative, explicit, no-magic philosophy.
