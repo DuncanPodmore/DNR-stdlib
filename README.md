@@ -33,6 +33,7 @@ src/dnr/
   testing.d     assertion harness (check / near / expect_eq / testing_summary)
   mem.d         Allocator + malloc / arena / pool / tracking allocators
   array.d       Array!T — growable array over an Allocator
+  algo.d        sort / search / rearrange over slices
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
@@ -91,6 +92,22 @@ can grow returns `false` on OOM and leaves the array untouched.
 ⚠️ A handle, not a value — copying aliases the block. Pass by `ref`. POD
 container — element destructors are never run.
 
+## `dnr.algo` — slice operations
+
+Plain functions over `T[]` / `const(T)[]` — no allocator, a slice is a view the
+caller owns. The `std.algorithm` subset the game actually reaches for.
+
+- rearrange: `swap`, `reverse`, `fill`, `rotate_left`
+- scan: `index_of` / `contains` / `count` / `equal`, `min_index` / `max_index`,
+  `is_sorted`
+- sort: `insertion_sort` (stable, O(n²) — small / nearly-sorted) and `sort` (an
+  iterative quicksort — median-of-three, insertion cutoff, bounded explicit
+  stack; **unstable**, no recursion, no allocation)
+- search a sorted slice: `lower_bound` / `upper_bound` / `binary_search`
+
+Ordering is a `bool function(const(T), const(T)) @nogc nothrow` `less` argument,
+defaulting to `a < b`. Pass one for descending order or sort-by-key.
+
 ## Roadmap
 
 **Tier 0** (foundation, in order):
@@ -99,7 +116,7 @@ container — element destructors are never run.
 - [x] `mem` — allocators
 - [x] `array` — `Array!T` (growable array over an `Allocator`), the `~` / `.length`
       replacement
-- [ ] `algo` — sort, binary search, min/max/clamp over slices
+- [x] `algo` — sort, binary search, and the small slice rearrangers / scans
 - [ ] `math` — the `core.stdc.math` gaps: lerp, `PI` etc., int helpers, a stable
       `f32` compare
 
