@@ -34,6 +34,7 @@ src/dnr/
   mem.d         Allocator + malloc / arena / pool / tracking allocators
   array.d       Array!T — growable array over an Allocator
   algo.d        sort / search / rearrange over slices
+  math.d        scalar helpers — min/max/clamp, lerp, angle wrap, pow2
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 makefile        `make test`, `make check`
@@ -108,17 +109,34 @@ caller owns. The `std.algorithm` subset the game actually reaches for.
 Ordering is a `bool function(const(T), const(T)) @nogc nothrow` `less` argument,
 defaulting to `a < b`. Pass one for descending order or sort-by-key.
 
+## `dnr.math` — scalar helpers
+
+`core.stdc.math` has the transcendentals and nothing else. This is the rest:
+
+- generic (`T` = any int or float): `min` / `max` / `clamp` / `abs` / `sign`
+- interpolation: `lerp` / `lerp_clamped` / `inv_lerp` / `remap` / `saturate` /
+  `smoothstep`, and `damp` (frame-rate-independent exponential approach — the
+  game's camera / knockback / HP-trail decay shape)
+- float compare: `approx_eq` / `approx_zero`
+- angles (radians): `wrap_angle` (→ (-π, π]) / `angle_diff` / `lerp_angle` /
+  `to_rad` / `to_deg`
+- float→int: `ifloor` / `iceil` / `iround`
+- integers: `is_pow2` / `next_pow2` / `align_up` / `align_down` / `ceil_div` /
+  `abs_diff` / `gcd`
+- constants: `PI` / `TAU` / `HALF_PI` / `E` / `SQRT2` / `DEG2RAD` / `RAD2DEG`
+  (plus `PI_F` / `TAU_F` / `HALF_PI_F` and `EPSILON`)
+
 ## Roadmap
 
-**Tier 0** (foundation, in order):
+**Tier 0** (foundation) — **complete:**
 
 - [x] `testing` — the assertion harness
 - [x] `mem` — allocators
 - [x] `array` — `Array!T` (growable array over an `Allocator`), the `~` / `.length`
       replacement
 - [x] `algo` — sort, binary search, and the small slice rearrangers / scans
-- [ ] `math` — the `core.stdc.math` gaps: lerp, `PI` etc., int helpers, a stable
-      `f32` compare
+- [x] `math` — the `core.stdc.math` gaps: min/max/clamp, lerp/smoothstep/damp,
+      angle wrap, pow2 / align / gcd, float→int
 
 **Tier 1:**
 
