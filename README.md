@@ -57,6 +57,8 @@ src/dnr/
   ini.d         key = value + [section] parse / write
   io.d          whole-file read/write + LineReader
   time.d        monotonic clock + Duration + Stopwatch
+  process.d     spawn + wait a child process, Win32-quoted argv (Windows only)
+  fs.d          directories, copy/delete/rename, walk, mtime-based needs_rebuild (Windows only)
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
 nobd.d          the build tool — see Build below
@@ -77,22 +79,30 @@ tracking `make` is already good at — and then hands off:
 
 ```
 make test     # (re)build nobd if needed, then: nobd test  — compile the lib
-              # + tests to build/test and run it
+              # + tests to build/test and run it (skipped, and just re-run,
+              # if build/test is already newer than every source file)
 make check    # (re)build nobd if needed, then: nobd check — type-check the
               # library alone (-o-, no codegen, no main)
+build/nobd list   # print the available commands (same as `help`)
 ```
 
-`nobd.d` is deliberately self-contained — no `import dnr.*` — the same reason
-nob.h itself depends on nothing but the C standard library and the OS: if
-dnr-std is broken, the tool that builds and tests it still has to compile and
-run. It's plain `core.stdc` + a handful of hand-declared `CreateProcess`/
-`CreateDirectory` Win32 calls (the same "hand-roll exactly what you need"
-convention *Dopashooter*'s `screens.d` uses for `CreateDirectoryA`).
+`nobd.d` **uses dnr-std itself** — `dnr.process` (spawn + wait, proper Win32
+argv quoting) and `dnr.fs` (`mkdir_if_not_exists`, `needs_rebuild`) — rather
+than reimplementing narrower versions locally: it IS dnr-std's build tool, so
+once those two exist as real library modules, using them here is the natural,
+dogfooding choice. (An earlier version was deliberately self-contained
+instead, on nob.h's own "depend on nothing" reasoning. That trade-off is
+still real — a break in `dnr.process`/`dnr.fs` now breaks nobd's own
+bootstrap too — but it fails loudly at the `$(OUT)/nobd: nobd.d` compile
+step, pointing at the exact file and line, not silently.) The bootstrap line
+passes `-i -Isrc` so `ldc2` pulls in every module `nobd.d` imports without
+them being listed by hand.
 
 Toolchain: **LDC** (tested on 1.42), `-betterC -mscrtlib=msvcrt`, mingw `make`.
-No external libraries — `core.stdc` only. ⚠️ **Windows only for now** — `nobd.d`
-spawns processes via `CreateProcess`; a POSIX `fork`/`execvp` path would be a
-`version(Posix)` branch alongside it, not written yet.
+No external libraries — `core.stdc` only. ⚠️ **Windows only for now** —
+`dnr.process` spawns via `CreateProcess`; a POSIX `fork`/`execvp` path would
+be a `version(Posix)` branch alongside it, not written yet (see `dnr.process`
+below).
 
 ## `dnr.result` — `Option` / `Result` / `Status`
 
@@ -378,6 +388,56 @@ POSIX).
 `dur_add` / `dur_sub` / `dur_cmp`. `Stopwatch`: `sw_start` / `sw_read` (elapsed)
 / `sw_lap` (elapsed + restart).
 
+## `dnr.process` — spawn + wait
+
+⚠️ **Windows only for now** (`CreateProcess`-based) — the `version(Posix)`
+branch has the right signatures so callers type-check on any platform, but
+its bodies are `dnr.panic.todo()` (`fork`/`execvp`, not written yet).
+
+A `Cmd` is a growable argv list; build one with `cmd_add`, run it, free it:
+
+```d
+auto cmd = p.cmd_make(a);
+p.cmd_add(cmd, "ldc2"); p.cmd_add(cmd, "-betterC"); p.cmd_add(cmd, "foo.d");
+int code;
+if (p.cmd_run(cmd, p.RunOpt.init, &code) != p.ProcessResult.ok) { ... }
+p.cmd_free(cmd);
+```
+
+`cmd_run` → `ProcessResult` (`ok` / `failed` / `spawn_error`), spawn + wait in
+one call; `cmd_run_async` + `proc_wait` split it. `RunOpt.echo` (default
+true) prints `+ <cmd>` before running; `RunOpt.stdoutPath` / `stderrPath`
+redirect to a **file path**, not an in-memory pipe (a child that outpaces an
+unread pipe buffer can deadlock against a parent blocked waiting for it to
+exit — nob.h itself sidesteps the same problem the same way, redirect + read
+back). `win32_quote_cmd` renders a `Cmd` into the single command-line string
+`CreateProcess` actually takes — MSVCRT-compatible quoting, ported from
+nob.h's `nob__win32_cmd_quote` — and automatically prefixes a bare relative
+`argv[0]` containing a separator with `./`: `CreateProcess` (called with
+`lpApplicationName == NULL`) fails to resolve a relative path like
+`build/test` unless it's `./build/test` or already absolute — a real,
+empirically-confirmed Win32 quirk, normalized here so no caller has to
+remember it.
+
+## `dnr.fs` — filesystem structure
+
+Directories, copying / deleting / renaming, listing and walking a tree, and
+mtime comparison for incremental builds — `dnr.io` owns file *contents*, this
+owns everything about where files *live*. Ported from the filesystem half of
+nob.h. ⚠️ **Windows only for now**, same `version(Posix)` / `todo()` shape as
+`dnr.process`.
+
+`get_file_type` (→ `FileType`: `not_found` / `regular` / `directory` /
+`other`) · `mkdir_if_not_exists` (idempotent — already-exists is success) ·
+`copy_file` / `delete_file` / `rename_path` (all → `Status`) · `read_dir` (→
+`Result!DirListing`, each name its own allocation — free with
+`free_dir_listing`) · `walk_dir(a, root, WalkFunc, userData, postOrder =
+false)` (recursive; post-order for delete, pre-order for build/collect) ·
+`delete_directory_recursively` · `needs_rebuild` / `needs_rebuild1` (→
+`Result!bool` — is `outputPath` missing or older than the input(s)? a missing
+*input* is always `StdErr.not_found`, unlike a missing output) — the
+incremental-build check `nobd.d` uses to skip a compile when nothing changed.
+
 ## Roadmap
 
 **Tier 0** (foundation) — **complete:**
@@ -415,6 +475,18 @@ POSIX).
 - [x] `time` — monotonic `now()` + `Duration` + `Stopwatch` (Windows + POSIX)
 - [x] `mem` — a growing (block-chaining) arena (`GrowingArena`)
 
+**Tier 3 — build tooling — in progress:**
+
+- [x] `process` — spawn + wait, Win32-quoted argv (Windows; POSIX stubbed)
+- [x] `fs` — directories, copy/delete/rename, walk, `needs_rebuild` (Windows;
+      POSIX stubbed)
+- [x] `nobd.d` — dnr-std's own build tool, on top of `process` + `fs`,
+      nob.h-style subcommand dispatch (`test` / `check` / `list` / `help`)
+- [ ] `version(Posix)` bodies for `process` / `fs` — not a design gap, just
+      not needed yet (this project only builds on Windows so far)
+- [ ] parallel process execution / command chaining (nob.h's `Nob_Procs` /
+      `Nob_Chain`) — deliberately out of scope; nob.c itself doesn't use them
+
 ## Using it in a project
 
 Vendor `src/dnr/` into your tree and add the files you use (plus their
@@ -422,5 +494,7 @@ transitive imports) to your build's source list — no globbing, same as the
 game. Every module needs `panic` + `result`; `mem` pulls in nothing else;
 `array` / `str` / `hashmap` / `io` / `bitset` / `ringbuf` / `slotmap` pull in
 `mem`; `fmt` pulls in `str`; `hashmap` pulls in `hash`; `ini` pulls in `str` +
-`io` + `fmt`; `utf8` pulls in `str`; `time` stands alone. Ship `dnr.testing`
-too if you want the same `check` harness for your own tests.
+`io` + `fmt`; `utf8` pulls in `str`; `time` stands alone; `process` pulls in
+`mem` + `array` + `str` + `result`; `fs` pulls in `mem` + `array` + `result`.
+Ship `dnr.testing` too if you want the same `check` harness for your own
+tests.

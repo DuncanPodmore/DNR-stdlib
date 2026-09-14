@@ -8,8 +8,10 @@ OUT = build
 # step every nob-style tool needs: (re)compile nobd whenever nobd.d changes —
 # ordinary mtime-prerequisite tracking, the one thing make is unambiguously
 # good at — then hand off to it for everything else.
+# -i pulls in every module nobd.d imports (dnr.process, dnr.fs, ...) without
+# listing them by hand; -Isrc is where those dnr.* modules live.
 $(OUT)/nobd: nobd.d
-	$(CC) $(CFLAGS) nobd.d -of $(OUT)/nobd
+	$(CC) $(CFLAGS) -i -Isrc nobd.d -of $(OUT)/nobd
 
 test: $(OUT)/nobd
 	./$(OUT)/nobd test

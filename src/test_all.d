@@ -24,6 +24,8 @@ import dnr.fmt_test;
 import dnr.ini_test;
 import dnr.utf8_test;
 import dnr.time_test;
+import dnr.process_test;
+import dnr.fs_test;
 import c = core.stdc.stdio;
 
 extern (C) int main() {
@@ -47,6 +49,8 @@ extern (C) int main() {
     c.printf("ini\n");        run_ini_tests();
     c.printf("utf8\n");       run_utf8_tests();
     c.printf("time\n");       run_time_tests();
+    c.printf("process\n");    run_process_tests();
+    c.printf("fs\n");         run_fs_tests();
 
     return testing_summary();
 }
