@@ -59,20 +59,40 @@ src/dnr/
   time.d        monotonic clock + Duration + Stopwatch
   *_test.d      one per module
 src/test_all.d  the test runner (extern(C) main)
-makefile        `make test`, `make check`
+nobd.d          the build tool — see Build below
+makefile        bootstraps nobd.d, then `make test` / `make check` hand off to it
 ```
 
 `import dnr.mem;` — the package prefix is `dnr.`.
 
 ## Build
 
+Build configuration lives in **`nobd.d`**, not the makefile — a small
+self-hosted D program in the spirit of [tsoding/nob.h](https://github.com/tsoding/nob.h)
+("no-build": write your build tool in the same language as the project, so
+building D is D, not a second, weaker language bolted on top of it). `make`
+still owns the one bootstrapping step every nob-style tool needs — recompiling
+`nobd.d` into `build/nobd` whenever it changes, which is exactly the mtime
+tracking `make` is already good at — and then hands off:
+
 ```
-make test     # compile the lib + tests to build/test and run it
-make check    # type-check the library alone (-o-, no codegen, no main)
+make test     # (re)build nobd if needed, then: nobd test  — compile the lib
+              # + tests to build/test and run it
+make check    # (re)build nobd if needed, then: nobd check — type-check the
+              # library alone (-o-, no codegen, no main)
 ```
 
+`nobd.d` is deliberately self-contained — no `import dnr.*` — the same reason
+nob.h itself depends on nothing but the C standard library and the OS: if
+dnr-std is broken, the tool that builds and tests it still has to compile and
+run. It's plain `core.stdc` + a handful of hand-declared `CreateProcess`/
+`CreateDirectory` Win32 calls (the same "hand-roll exactly what you need"
+convention *Dopashooter*'s `screens.d` uses for `CreateDirectoryA`).
+
 Toolchain: **LDC** (tested on 1.42), `-betterC -mscrtlib=msvcrt`, mingw `make`.
-No external libraries — `core.stdc` only.
+No external libraries — `core.stdc` only. ⚠️ **Windows only for now** — `nobd.d`
+spawns processes via `CreateProcess`; a POSIX `fork`/`execvp` path would be a
+`version(Posix)` branch alongside it, not written yet.
 
 ## `dnr.result` — `Option` / `Result` / `Status`
 
